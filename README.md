@@ -20,12 +20,13 @@ git -C /tmp/ci-repair-example init
 git -C /tmp/ci-repair-example add .
 git -C /tmp/ci-repair-example -c user.name=demo -c user.email=demo@localhost commit -m fixture
 
-# Collect the real failure in the same image used by the pipeline.
-docker run --rm --network=none \
-  -v /tmp/ci-repair-example:/workspace:ro ci-repair-demo:local \
-  python -m unittest discover -s tests -k test_positive_interval \
-  > /tmp/ci-repair-failure.log 2>&1
-# Exit 1 above is expected.
+# Collect the real failure without relying on host bind mounts.
+docker create --name ci-repair-collect --network=none ci-repair-demo:local \
+  python -m unittest discover -s tests -k test_positive_interval
+docker cp /tmp/ci-repair-example/. ci-repair-collect:/workspace/
+docker start -a ci-repair-collect > /tmp/ci-repair-failure.log 2>&1
+# The captured test failure is expected.
+docker rm ci-repair-collect
 ```
 
 Configure DeepSeek credentials in an ignored `.env` file (copy `.env.example`
