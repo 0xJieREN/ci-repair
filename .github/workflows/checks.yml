@@ -1,0 +1,22 @@
+name: checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: docker build -t ci-repair-demo:local -f examples/Dockerfile examples
+      - run: uv run pytest -q
+        env:
+          CI_REPAIR_DOCKER_TESTS: '1'
