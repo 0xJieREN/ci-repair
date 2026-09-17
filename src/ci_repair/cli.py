@@ -20,6 +20,9 @@ def main():
     parser.add_argument(
         "--allow", action="append", default=None, help="Allowed source prefix; repeatable"
     )
+    parser.add_argument(
+        "--env-file", type=Path, help="Explicit local dotenv file (never committed)"
+    )
     parser.add_argument("--model", required=True, help="LiteLLM provider/model")
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--steps", type=int, default=30)
@@ -46,6 +49,12 @@ def main():
         config.validate()
     except ValueError as exc:
         parser.error(str(exc))
+    if args.env_file:
+        if not args.env_file.is_file():
+            parser.error("Environment file does not exist")
+        from dotenv import load_dotenv
+
+        load_dotenv(args.env_file, override=True)
     # Never put secrets in model_kwargs: mini serializes those into trajectory.json.
     if os.getenv("ANTHROPIC_AUTH_TOKEN") and not os.getenv("ANTHROPIC_API_KEY"):
         os.environ["ANTHROPIC_API_KEY"] = os.environ["ANTHROPIC_AUTH_TOKEN"]
@@ -55,6 +64,9 @@ def main():
     model = LitellmModel(
         model_name=args.model,
         cost_tracking="default",
+        observation_template="returncode={{output.returncode}}\n{{output.output[:12000]}}\n"
+        "{% if output.output|length > 12000 %}[output truncated]{% endif %}"
+        "{{output.exception_info}}",
         model_kwargs={"timeout": min(90, args.wall_seconds), "num_retries": 0, "max_tokens": 4096},
     )
     report = run(config, model)

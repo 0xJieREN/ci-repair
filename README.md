@@ -28,28 +28,32 @@ docker run --rm --network=none \
 # Exit 1 above is expected.
 ```
 
-Configure your provider's credentials in the host environment. For an
-Anthropic-compatible MiniMax endpoint:
+Configure DeepSeek credentials in an ignored `.env` file (copy `.env.example`
+and fill in the key locally). Never commit or paste your key into a run command.
 
 ```sh
-export ANTHROPIC_BASE_URL=https://api.minimax.io/anthropic
-# Set ANTHROPIC_API_KEY securely; ANTHROPIC_AUTH_TOKEN is also accepted.
-export LITELLM_MODEL_REGISTRY_PATH="$PWD/config/minimax-pricing.json"
 uv run ci-repair /tmp/ci-repair-example \
+  --env-file .env \
   --failure-log /tmp/ci-repair-failure.log \
   --image ci-repair-demo:local \
-  --model anthropic/MiniMax-M2.7 \
+  --model deepseek/deepseek-flash \
   --test 'python -m unittest discover -s tests -k test_positive_interval' \
   --regression 'python -m unittest discover -s tests' \
   --allow src/ --steps 30 --cost 1 --wall-seconds 600
 ```
 
 The model receives the command and log, not the bug location or desired edit.
-Use another LiteLLM provider/model with its standard environment variables if
-preferred. The checked-in MiniMax price registry is an estimate from the
-[official pricing table](https://platform.minimax.io/docs/guides/pricing-paygo),
-checked 2026-09-17; it is not a billing receipt. Interface configuration follows
-the [official Anthropic compatibility guide](https://platform.minimax.io/docs/api-reference/text-anthropic-api).
+The [official DeepSeek quick start](https://api-docs.deepseek.com/) currently
+names `deepseek-flash`. The included registry uses conservative peak rates from
+[DeepSeek pricing](https://api-docs.deepseek.com/quick_start/pricing), checked
+2026-09-17. Estimates are not billing receipts; off-peak charges may be lower.
+
+Other LiteLLM providers work with their standard environment variables. For
+MiniMax's Anthropic interface, set `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`),
+`ANTHROPIC_BASE_URL=https://api.minimax.io/anthropic`, and
+`LITELLM_MODEL_REGISTRY_PATH=config/minimax-pricing.json`; use
+`--model anthropic/MiniMax-M2.7`. Its registry follows the
+[official pricing table](https://platform.minimax.io/docs/guides/pricing-paygo).
 
 `runs/<id>/report.json` is authoritative: only `PASS` exits zero. It records
 baseline commit, exact local image ID, test outputs, changed files, duration,
