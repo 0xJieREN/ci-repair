@@ -1,8 +1,8 @@
 # CI Repair
 
 A small local CI repair pipeline around **mini-SWE-agent**, with an independent
-Docker verifier. Alpha v0.2: local repair plus manual GitHub Actions failure import.
-No automated repair PRs or webhook service.
+Docker verifier. Alpha v0.3: local repair, GitHub Actions failure import, explicit PR provenance,
+and verified-patch draft PR publication. No automatic triggers or merging.
 
 See [design](docs/design.md) for acceptance criteria and boundaries.
 
@@ -11,6 +11,14 @@ See [design](docs/design.md) for acceptance criteria and boundaries.
 Use `ci-repair-github OWNER/REPO RUN_ID --output runs/import-01` to collect a
 failed job and its exact source commit. See [GitHub Actions import](docs/github-actions.md)
 for supported events, job selection and connection to the repair pipeline.
+
+## Prepare and publish repair PRs
+
+Use `ci-repair-pr prepare` to produce a local commit and reviewable PR body, then
+`ci-repair-pr publish` to explicitly create a draft PR. PR inputs require an
+explicit checkout SHA; moved branches and changed patches are rejected.
+See [PR provenance and publication](docs/pull-requests.md) for the complete flow
+and current limits, including head-only publication and no fork support.
 
 ## Run locally
 

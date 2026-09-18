@@ -7,11 +7,11 @@ The existing mini-SWE-agent loop and independent verifier remain unchanged.
 ## Collect
 
 Requires `gh auth login` with read access to the source repository and Actions.
-Only github.com, completed failures, same-repository `push` or
-`workflow_dispatch` events are supported. The workflow must have tested its
+GitHub.com completed failures from same-repository `push`, `workflow_dispatch`,
+and (since v0.3) explicit-SHA `pull_request` events are supported. The workflow must have tested its
 reported `head_sha` with the default checkout; custom checkout refs are not
-inferred. PR merge refs and fork workflows are deliberately rejected until
-source provenance can be supported explicitly.
+inferred. For PR head/merge provenance and fork restrictions, see
+[PR collection](pull-requests.md).
 
 ```sh
 uv run ci-repair-github OWNER/REPO RUN_ID --output runs/import-01
@@ -76,5 +76,6 @@ API sources checked 2026-09-18:
 [workflow runs](https://docs.github.com/en/rest/actions/workflow-runs),
 [attempt jobs and individual job logs](https://docs.github.com/en/rest/actions/workflow-jobs).
 
-Next slices: PR checkout provenance and reviewable repair PR publication;
-then automatic triggers. Automatic command/test selection remains deferred.
+PR checkout provenance and explicit draft publication are available in v0.3;
+see [publication](pull-requests.md). Automatic triggers and command/test selection
+remain deferred.
