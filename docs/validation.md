@@ -55,3 +55,22 @@ repair PR integration remain outside v0.1. Run artifacts and secrets stay local.
   No paid model API calls were made for this iteration; the scripted smoke test
   demonstrates integration, not a new measurement of model repair ability.
 - Colima was stopped after each local Docker test session.
+
+# v0.3 validation — 2026-09-18
+
+- Local full suite: **53 passed**, including four Docker integration cases.
+  Ruff lint, formatting and diff whitespace checks passed.
+- Real local Git repositories/bare remotes exercise commit preparation,
+  creation-only push, repeated publish, existing branch conflicts, closed PRs,
+  branch movement, modified evidence and dirty prepared checkouts.
+- A real Docker verifier's PASS report and patch digest fed the preparation and
+  publication path successfully. GitHub PR creation/list responses were simulated;
+  the source repository remained unchanged. No paid model requests were made.
+- PR source tests cover explicit head checkout, historical merge parents,
+  different run/checkout SHAs, fork rejection and rejection of pull_request_target.
+  The expected run/PR repository-ID and SHA field shapes were also checked against
+  public mini-SWE-agent Actions run `34902917572` using read-only GitHub API access.
+- `gh pr list` field selection was verified against this repository. No actual
+  GitHub repair PR was created: live PR publication remains an operator-run
+  acceptance step using `ci-repair-pr publish` and fresh verified evidence.
+- Colima was stopped and its `Stopped` status confirmed after the local test run.
