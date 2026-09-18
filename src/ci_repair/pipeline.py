@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 
 from minisweagent.agents.default import DefaultAgent
 
+from ci_repair.github import load_context
 from ci_repair.workspace import command, extract_patch, snapshot, workspace
 
 
@@ -28,6 +29,7 @@ class Config:
     cost: float = 1.0
     wall_seconds: int = 600
     command_seconds: int = 60
+    ci_context: Path | None = None
 
     def validate(self):
         if min(self.steps, self.cost, self.wall_seconds, self.command_seconds) <= 0:
@@ -48,7 +50,7 @@ def write_json(path: Path, value):
     path.write_text(json.dumps(value, indent=2, default=str) + "\n")
 
 
-def build_context(config: Config, sha: str, log: str) -> str:
+def build_context(config: Config, sha: str, log: str, ci: dict | None = None) -> str:
     # Tail preserves the usual final traceback; the full log remains in artifacts.
     excerpt = log if len(log) <= 16000 else "[earlier log truncated]\n" + log[-16000:]
     return json.dumps(
@@ -58,6 +60,7 @@ def build_context(config: Config, sha: str, log: str) -> str:
             "regression_command": config.regression_command,
             "allowed_source_prefixes": config.allowed_paths,
             "failure_log_untrusted": excerpt,
+            **({"github_actions_untrusted": ci} if ci is not None else {}),
         },
         indent=2,
     )
@@ -107,9 +110,13 @@ def run(config: Config, model) -> dict:
             .strip()
         )
         report["image_id"] = image
-        log = config.failure_log.read_text(errors="replace")
+        raw_log = config.failure_log.read_bytes()
+        ci = load_context(config.ci_context, sha, raw_log) if config.ci_context else None
+        if ci is not None:
+            report["github_actions"] = ci
+        log = raw_log.decode(errors="replace")
         (config.output / "failure.log").write_text(log)
-        context = build_context(config, sha, log)
+        context = build_context(config, sha, log, ci)
         (config.output / "context.json").write_text(context + "\n")
         with workspace(archive, image, config.command_seconds, config.wall_seconds) as env:
             baseline = run_test(env, config.failing_command, config.output / "baseline.json")

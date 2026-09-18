@@ -12,6 +12,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo", type=Path)
     parser.add_argument("--failure-log", type=Path, required=True)
+    parser.add_argument("--ci-context", type=Path, help="Collected GitHub Actions manifest")
     parser.add_argument(
         "--image", required=True, help="Prepared local Docker image with git and bash"
     )
@@ -44,6 +45,7 @@ def main():
         cost=args.cost,
         wall_seconds=args.wall_seconds,
         command_seconds=args.command_seconds,
+        ci_context=args.ci_context,
     )
     try:
         config.validate()

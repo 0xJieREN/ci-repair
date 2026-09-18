@@ -1,9 +1,16 @@
 # CI Repair
 
 A small local CI repair pipeline around **mini-SWE-agent**, with an independent
-Docker verifier. Alpha: local v0.1, no automated repair PRs or webhook service.
+Docker verifier. Alpha v0.2: local repair plus manual GitHub Actions failure import.
+No automated repair PRs or webhook service.
 
 See [design](docs/design.md) for acceptance criteria and boundaries.
+
+## Import GitHub Actions failures
+
+Use `ci-repair-github OWNER/REPO RUN_ID --output runs/import-01` to collect a
+failed job and its exact source commit. See [GitHub Actions import](docs/github-actions.md)
+for supported events, job selection and connection to the repair pipeline.
 
 ## Run locally
 
