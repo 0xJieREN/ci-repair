@@ -1,5 +1,6 @@
 """Deterministic baseline -> repair -> fresh verification orchestration."""
 
+import hashlib
 import json
 import signal
 import time
@@ -143,6 +144,7 @@ def run(config: Config, model) -> dict:
             report["agent_result"] = agent.run(context)
             patch = extract_patch(env)
             (config.output / "patch.diff").write_bytes(patch)
+            report["patch_sha256"] = hashlib.sha256(patch).hexdigest()
         if not patch:
             report["status"] = "NO_PATCH"
             return report

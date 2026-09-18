@@ -1,5 +1,6 @@
 """Real Docker + real mini agent loop, scripted model; no paid API requests."""
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -87,5 +88,9 @@ def test_fresh_verifier(tmp_path, script, expected):
     )
     report = run(cfg, ScriptedModel(script))
     assert report["status"] == expected, report
+    assert (
+        report["patch_sha256"]
+        == hashlib.sha256((cfg.output / "patch.diff").read_bytes()).hexdigest()
+    )
     assert "range(start, end)" in (repo / "src/ranges.py").read_text()
     assert (cfg.output / "trajectory.json").exists()

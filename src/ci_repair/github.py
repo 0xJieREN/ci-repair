@@ -41,6 +41,51 @@ def select_job(jobs: list[dict], job_id: int | None) -> dict:
     return failed[0]
 
 
+def resolve_source(repository: str, run: dict, checkout_sha: str | None) -> tuple[str, dict]:
+    """PR checkout SHA is supplied from the selected job's checkout log, not today's merge ref."""
+    event = run["event"]
+    if event not in ("push", "workflow_dispatch", "pull_request"):
+        raise CollectionError("Unsupported event; pull_request_target is never executed")
+    if run["head_repository"]["full_name"].lower() != repository.lower():
+        raise CollectionError("Cross-repository runs are not supported")
+    head = run["head_sha"]
+    sha = checkout_sha or head
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise CollectionError("Run has an invalid commit SHA")
+    if event != "pull_request":
+        if sha != head:
+            raise CollectionError("Checkout SHA must match the run for non-PR events")
+        return sha, {"checkout_kind": "head", "head_branch": run.get("head_branch")}
+    prs = run.get("pull_requests", [])
+    if len(prs) != 1 or checkout_sha is None:
+        raise CollectionError(
+            "PR runs require one associated PR and explicit --checkout-sha from the job log"
+        )
+    pr = prs[0]
+    repository_id = run.get("repository", {}).get("id")
+    if repository_id is None or pr["head"].get("repo", {}).get("id") != repository_id:
+        raise CollectionError("Fork PRs or missing repository identity are not supported")
+    if pr["head"]["sha"] != head:
+        raise CollectionError("PR head does not match the run")
+    kind = "head"
+    if sha != head:
+        commit = json.loads(api(f"repos/{repository}/commits/{sha}"))
+        parents = [parent["sha"] for parent in commit["parents"]]
+        if parents != [pr["base"]["sha"], head]:
+            raise CollectionError("Merge commit parents do not match the recorded PR base and head")
+        kind = "merge"
+    return sha, {
+        "checkout_kind": kind,
+        "head_branch": pr["head"]["ref"],
+        "pull_request": {
+            "number": pr["number"],
+            "head_sha": head,
+            "base_sha": pr["base"]["sha"],
+            "base_branch": pr["base"]["ref"],
+        },
+    }
+
+
 def collect(
     repository: str,
     run_id: int,
@@ -48,6 +93,7 @@ def collect(
     *,
     job_id: int | None = None,
     attempt: int | None = None,
+    checkout_sha: str | None = None,
 ) -> dict:
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise CollectionError("Repository must be owner/name on github.com")
@@ -61,15 +107,7 @@ def collect(
     run = json.loads(api(f"{base}/attempts/{attempt}"))
     if run["status"] != "completed" or run["conclusion"] != "failure":
         raise CollectionError("Only completed failed runs are supported")
-    if run["event"] not in ("push", "workflow_dispatch"):
-        raise CollectionError(
-            "v0.2 supports push/workflow_dispatch only; PR merge commits need explicit handling"
-        )
-    if run["head_repository"]["full_name"].lower() != repository.lower():
-        raise CollectionError("Cross-repository runs are not supported")
-    sha = run["head_sha"]
-    if not re.fullmatch(r"[0-9a-f]{40}", sha):
-        raise CollectionError("Run has an invalid commit SHA")
+    sha, source = resolve_source(repository, run, checkout_sha)
     jobs = []
     page = 1
     while True:
@@ -79,13 +117,14 @@ def collect(
             break
         page += 1
     job = select_job(jobs, job_id)
-    if job["run_id"] != run_id or job["head_sha"] != sha:
+    if job["run_id"] != run_id or job["head_sha"] != run["head_sha"]:
         raise CollectionError("Job does not match the selected run commit")
     log = api(f"repos/{repository}/actions/jobs/{job['id']}/logs")
     if not log.strip():
         raise CollectionError("Failed job log is empty or unavailable")
     metadata = {
         "schema_version": 1,
+        **source,
         "repository": repository,
         "commit": sha,
         "run_id": run_id,
@@ -147,7 +186,11 @@ def load_context(path: Path, sha: str, log: bytes) -> dict:
         "job_name",
         "failed_steps",
     )
-    return {field: metadata[field] for field in fields}
+    result = {field: metadata[field] for field in fields}
+    for field in ("checkout_kind", "head_branch", "pull_request"):
+        if field in metadata:
+            result[field] = metadata[field]
+    return result
 
 
 def main():
@@ -157,6 +200,9 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--job-id", type=int)
     parser.add_argument("--attempt", type=int, help="Default: latest attempt at collection start")
+    parser.add_argument(
+        "--checkout-sha", help="Exact SHA checked out by the PR job; required for PR events"
+    )
     args = parser.parse_args()
     try:
         result = collect(
@@ -165,6 +211,7 @@ def main():
             args.output.resolve(),
             job_id=args.job_id,
             attempt=args.attempt,
+            checkout_sha=args.checkout_sha,
         )
     except (CollectionError, subprocess.SubprocessError, OSError) as exc:
         # gh errors can contain auth details: expose controlled errors only.

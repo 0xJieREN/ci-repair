@@ -29,6 +29,7 @@ def run_data(**overrides):
         "run_attempt": 2,
         "event": "push",
         "head_repository": {"full_name": "owner/repo"},
+        "repository": {"id": 1},
         "head_sha": SHA,
         "html_url": "https://github.com/owner/repo/actions/runs/7",
         "name": "CI",
@@ -189,3 +190,76 @@ def test_only_log_api_allows_raw_escape_sequences(monkeypatch):
     github.api("repos/owner/repo/actions/runs/7")
     assert "--allow-escape-sequences" in calls[0]
     assert "--allow-escape-sequences" not in calls[1]
+
+
+def pr_run():
+    return run_data(
+        event="pull_request",
+        pull_requests=[
+            {
+                "number": 8,
+                "head": {"sha": SHA, "ref": "feature", "repo": {"id": 1}},
+                "base": {"sha": "b" * 40, "ref": "main"},
+            }
+        ],
+    )
+
+
+def test_pr_requires_explicit_checkout_sha():
+    with pytest.raises(CollectionError, match="checkout-sha"):
+        github.resolve_source("owner/repo", pr_run(), None)
+    sha, source = github.resolve_source("owner/repo", pr_run(), SHA)
+    assert sha == SHA
+    assert source["checkout_kind"] == "head"
+    assert source["head_branch"] == "feature"
+    assert source["pull_request"]["number"] == 8
+
+
+def test_pr_merge_uses_recorded_parents_not_current_merge_ref(monkeypatch):
+    monkeypatch.setattr(
+        github,
+        "api",
+        lambda path: json.dumps({"parents": [{"sha": "b" * 40}, {"sha": SHA}]}).encode(),
+    )
+    sha, source = github.resolve_source("owner/repo", pr_run(), "c" * 40)
+    assert sha == "c" * 40
+    assert source["checkout_kind"] == "merge"
+    monkeypatch.setattr(
+        github,
+        "api",
+        lambda path: json.dumps({"parents": [{"sha": "d" * 40}, {"sha": SHA}]}).encode(),
+    )
+    with pytest.raises(CollectionError, match="parents"):
+        github.resolve_source("owner/repo", pr_run(), "c" * 40)
+
+
+def test_pr_merge_collection_records_different_job_and_checkout_sha(tmp_path, monkeypatch):
+    fake_api(monkeypatch, run=pr_run())
+    original = github.api
+
+    def api(path):
+        if "/commits/" in path:
+            return json.dumps({"parents": [{"sha": "b" * 40}, {"sha": SHA}]}).encode()
+        return original(path)
+
+    monkeypatch.setattr(github, "api", api)
+
+    def command(args, **kwargs):
+        return b"c" * 40 if args[:3] == ["git", "rev-parse", "HEAD"] else b""
+
+    monkeypatch.setattr(github, "command", command)
+    result = collect("owner/repo", 7, tmp_path / "out", checkout_sha="c" * 40)
+    assert result["commit"] == "c" * 40
+    assert result["pull_request"]["head_sha"] == SHA
+
+
+def test_pull_request_target_remains_rejected():
+    with pytest.raises(CollectionError, match="Unsupported"):
+        github.resolve_source("owner/repo", run_data(event="pull_request_target"), SHA)
+
+
+def test_fork_pr_rejected_even_if_run_head_repository_is_base():
+    run = pr_run()
+    run["pull_requests"][0]["head"]["repo"]["id"] = 2
+    with pytest.raises(CollectionError, match="Fork"):
+        github.resolve_source("owner/repo", run, SHA)
