@@ -103,3 +103,9 @@ for the fixes, efficiency changes and remaining limits.
 
 For restricted local environments, set `UV_CACHE_DIR` and
 `MSWEA_GLOBAL_CONFIG_DIR` to writable directories.
+
+## Evaluation baseline
+
+Six fixed synthetic cases and hidden-oracle controls are available through
+`uv run python -m ci_repair.evaluate`. See [evaluation protocol](docs/evaluation.md)
+for control runs, per-case budgets and the limits of these measurements.

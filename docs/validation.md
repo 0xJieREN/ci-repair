@@ -94,3 +94,11 @@ repair PR integration remain outside v0.1. Run artifacts and secrets stay local.
   cases. A marker created by the failing-command verifier cannot help or break
   the regression verifier. Both start from the same input archive and patch.
 - Colima was stopped after the run. No paid model calls were made.
+
+# Synthetic evaluation controls — 2026-09-18
+
+- Full local gate: **81 passed**. All six correct references passed both public
+  verification and the hidden oracle. The overfit control passed public checks
+  but failed the hidden oracle; the no-op control produced NO_PATCH.
+- These are evaluator controls, not measured model repair results. No paid model
+  calls were made. Colima was stopped after the full run.
