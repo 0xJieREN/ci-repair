@@ -87,3 +87,10 @@ repair PR integration remain outside v0.1. Run artifacts and secrets stay local.
   No paid model API calls or real PR creation were involved.
 - See [review findings](review-2026-09-18.md) and
   [local/server commands](verification.md) for resolved issues and remaining limits.
+
+# Verification isolation — 2026-09-18
+
+- Local full gate: **71 passed**, including two new Docker state-contamination
+  cases. A marker created by the failing-command verifier cannot help or break
+  the regression verifier. Both start from the same input archive and patch.
+- Colima was stopped after the run. No paid model calls were made.

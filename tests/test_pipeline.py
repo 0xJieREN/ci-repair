@@ -77,7 +77,7 @@ def test_snapshot_rejects_dirty_repo(tmp_path):
         (1, b"", "src/a.py\0", 0, "NO_PATCH", 2),
         (1, b"patch", "tests/test.py\0", 0, "PATCH_REJECTED", 3),
         (1, b"patch", "src/a.py\0", 1, "FAIL", 3),
-        (1, b"patch", "src/a.py\0", 0, "PASS", 3),
+        (1, b"patch", "src/a.py\0", 0, "PASS", 4),
     ],
 )
 def test_orchestration(tmp_path, monkeypatch, baseline, patch, paths, verify, status, phases):

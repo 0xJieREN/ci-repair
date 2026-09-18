@@ -42,7 +42,9 @@ requires. Do not use the Colima-managed mode for a shared remote Docker daemon.
 
 A repaired target repository's verification already runs in local Docker via
 `ci-repair`: original failure first, then the explicitly configured regression
-command. The same CLI runs on a Linux server. Its test dependencies must be in
+command. Each verification command receives a separate fresh container with the
+same original snapshot, patch and image; files and caches from the first check
+do not reach the second. Commands must include their own required setup. The same CLI runs on a Linux server. Its test dependencies must be in
 the supplied image; no GitHub-hosted runner is required. Prepared images now
 require GNU `timeout` in addition to Bash/Git (the demo image includes it).
 

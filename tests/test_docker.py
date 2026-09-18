@@ -36,14 +36,16 @@ def scripted_model(script):
 
 
 @pytest.mark.parametrize(
-    "script,expected",
+    "script,expected,marker_expectation",
     [
-        ("sed -i 's/range(start, end)/range(start, end + 1)/' src/ranges.py", "PASS"),
-        ("sed -i 's/, 14)/, 9)/' tests/test_ranges.py", "PATCH_REJECTED"),
-        ("true", "NO_PATCH"),
+        ("sed -i 's/range(start, end)/range(start, end + 1)/' src/ranges.py", "PASS", None),
+        ("sed -i 's/, 14)/, 9)/' tests/test_ranges.py", "PATCH_REJECTED", None),
+        ("true", "NO_PATCH", None),
+        ("sed -i 's/range(start, end)/range(start, end + 1)/' src/ranges.py", "PASS", "! -e"),
+        ("sed -i 's/range(start, end)/range(start, end + 1)/' src/ranges.py", "FAIL", "-e"),
     ],
 )
-def test_fresh_verifier(tmp_path, script, expected):
+def test_fresh_verifier(tmp_path, script, expected, marker_expectation):
     repo = tmp_path / "target"
     shutil.copytree(
         Path(__file__).parents[1] / "examples/buggy",
@@ -79,6 +81,16 @@ def test_fresh_verifier(tmp_path, script, expected):
         "python -m unittest discover -s tests -k test_positive_interval",
         "python -m unittest discover -s tests",
     )
+    if marker_expectation:
+        from dataclasses import replace
+
+        # State outside the checkout also must not leak between verifier commands.
+        cfg = replace(
+            cfg,
+            failing_command=cfg.failing_command + " && touch /tmp/verifier-marker",
+            regression_command=f"test {marker_expectation} /tmp/verifier-marker && "
+            + cfg.regression_command,
+        )
     report = run(cfg, scripted_model(script))
     assert report["status"] == expected, report
     assert (
