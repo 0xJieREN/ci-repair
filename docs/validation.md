@@ -102,3 +102,18 @@ repair PR integration remain outside v0.1. Run artifacts and secrets stay local.
   but failed the hidden oracle; the no-op control produced NO_PATCH.
 - These are evaluator controls, not measured model repair results. No paid model
   calls were made. Colima was stopped after the full run.
+
+# Structured context and replay plans — 2026-09-18
+
+- Final local full gate: **94 passed**, including a reviewed-plan-to-Docker repair
+  using a nested working directory and Bash fail-fast semantics. Unit cases
+  cover stale inputs, unsupported workflows, ambiguous YAML and review policy.
+- Generated `runs/replay-plan-01.json` from the historical real collection at
+  `runs/github-import-01/`; it remains an unreviewed, unexecuted local draft.
+- Ran the evaluation CLI on all six deliberate overfit controls. All six passed
+  public verification and failed the separate hidden oracle, with zero evaluator
+  errors and zero paid model calls. Evidence: `runs/eval-overfit-01/summary.json`.
+  This demonstrates detection of known false PASS, not a measured model failure rate.
+- Colima was stopped and Stopped status confirmed after each Docker session.
+- Real model comparison against an upstream mini-SWE baseline and expansion to
+  20–50 representative failures remain future experiments, not completed evidence.

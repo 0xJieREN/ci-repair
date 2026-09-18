@@ -48,7 +48,8 @@ do not reach the second. Commands must include their own required setup. The sam
 the supplied image; no GitHub-hosted runner is required. Prepared images now
 require GNU `timeout` in addition to Bash/Git (the demo image includes it).
 
-Neither gate automatically discovers every command in arbitrary workflow YAML.
+The optional [replay-plan builder](replay-plan.md) extracts one supported static
+failed step for review. Neither gate discovers every command in arbitrary workflow YAML.
 For another repository, configure the original test command, regression command,
 image, working directory, dependency versions and necessary fixtures explicitly.
 Keep secrets out of repair containers. Tests needing external services need a

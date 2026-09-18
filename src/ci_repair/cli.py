@@ -37,14 +37,13 @@ def make_model(name: str, model_class: str = "litellm", wall_seconds: int = 600)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("repo", type=Path)
-    parser.add_argument("--failure-log", type=Path, required=True)
+    parser.add_argument("repo", type=Path, nargs="?")
+    parser.add_argument("--plan", type=Path, help="Explicitly reviewed replay plan")
+    parser.add_argument("--failure-log", type=Path)
     parser.add_argument("--ci-context", type=Path, help="Collected GitHub Actions manifest")
-    parser.add_argument(
-        "--image", required=True, help="Prepared local Docker image with git and bash"
-    )
-    parser.add_argument("--test", required=True, help="Original failing command")
-    parser.add_argument("--regression", required=True)
+    parser.add_argument("--image", help="Prepared local Docker image with git and bash")
+    parser.add_argument("--test", help="Original failing command")
+    parser.add_argument("--regression")
     parser.add_argument(
         "--allow", action="append", default=None, help="Allowed source prefix; repeatable"
     )
@@ -64,21 +63,46 @@ def main():
     parser.add_argument("--wall-seconds", type=int, default=600)
     parser.add_argument("--command-seconds", type=int, default=60)
     args = parser.parse_args()
+    if args.plan:
+        if any(
+            (
+                args.repo,
+                args.failure_log,
+                args.ci_context,
+                args.image,
+                args.test,
+                args.regression,
+                args.allow,
+            )
+        ):
+            parser.error("--plan cannot be combined with explicit repair inputs")
+        from ci_repair.plan import load_plan
+
+        try:
+            inputs = load_plan(args.plan)
+        except (ValueError, OSError, KeyError) as exc:
+            parser.error(str(exc))
+    else:
+        if not all((args.repo, args.failure_log, args.image, args.test, args.regression)):
+            parser.error("Provide repo, --failure-log, --image, --test and --regression, or --plan")
+        inputs = dict(
+            repo=args.repo.resolve(),
+            failure_log=args.failure_log.resolve(),
+            image=args.image,
+            failing_command=args.test,
+            regression_command=args.regression,
+            allowed_paths=tuple(args.allow or ["src/"]),
+            ci_context=args.ci_context,
+        )
     config = Config(
-        repo=args.repo.resolve(),
-        failure_log=args.failure_log.resolve(),
+        **inputs,
         output=(
             args.output or Path("runs") / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         ).resolve(),
-        image=args.image,
-        failing_command=args.test,
-        regression_command=args.regression,
-        allowed_paths=tuple(args.allow or ["src/"]),
         steps=args.steps,
         cost=args.cost,
         wall_seconds=args.wall_seconds,
         command_seconds=args.command_seconds,
-        ci_context=args.ci_context,
     )
     try:
         config.validate()

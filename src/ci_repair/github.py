@@ -131,6 +131,7 @@ def collect(
         "run_url": run["html_url"],
         "event": run["event"],
         "workflow": run["name"],
+        "workflow_path": run.get("path"),
         "job_id": job["id"],
         "job_name": job["name"],
         "failed_steps": [

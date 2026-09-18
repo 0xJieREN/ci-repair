@@ -1,8 +1,9 @@
 # CI Repair
 
 A small local CI repair pipeline around **mini-SWE-agent**, with an independent
-Docker verifier. Alpha v0.3: local repair, GitHub Actions failure import, explicit PR provenance,
-and verified-patch draft PR publication. No automatic triggers or merging.
+Docker verifier. Alpha: local repair, GitHub Actions failure import, reviewed replay
+plans, structured failure context, synthetic evaluation, and explicit draft PR
+publication. No automatic triggers or merging.
 
 See [design](docs/design.md) for acceptance criteria and boundaries.
 
@@ -109,3 +110,10 @@ For restricted local environments, set `UV_CACHE_DIR` and
 Six fixed synthetic cases and hidden-oracle controls are available through
 `uv run python -m ci_repair.evaluate`. See [evaluation protocol](docs/evaluation.md)
 for control runs, per-case budgets and the limits of these measurements.
+
+## Reviewed replay plans
+
+`ci-repair-plan COLLECTION --output PLAN.json` creates a review-only draft from
+the pinned workflow. Fill in the prepared image, regression command and allowed
+paths, then use `ci-repair --plan PLAN.json --model ...`. See the
+[plan contract and supported workflow subset](docs/replay-plan.md).
