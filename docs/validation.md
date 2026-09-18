@@ -74,3 +74,16 @@ repair PR integration remain outside v0.1. Run artifacts and secrets stay local.
   GitHub repair PR was created: live PR publication remains an operator-run
   acceptance step using `ci-repair-pr publish` and fresh verified evidence.
 - Colima was stopped and its `Stopped` status confirmed after the local test run.
+
+# Repository audit and shared verification gate — 2026-09-18
+
+- Ran `bash scripts/check.sh --colima` locally before pushing: locked dependency
+  sync, Ruff lint/format checks, cached Docker image build, **69 tests passed**
+  in 11.27 seconds of pytest execution, and diff whitespace checks passed.
+- The test suite now uses mini-SWE-agent's native deterministic model and covers
+  native factory configuration, finite budgets, timeout process termination,
+  false-PASS prevention, archive transformation detection and conditional fetch.
+- The shared script automatically stopped Colima at the end of the full gate.
+  No paid model API calls or real PR creation were involved.
+- See [review findings](review-2026-09-18.md) and
+  [local/server commands](verification.md) for resolved issues and remaining limits.

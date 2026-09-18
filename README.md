@@ -82,19 +82,24 @@ be available in the private trajectory.
 The fixture deliberately contains failing tests. Our test suite lives in
 `tests/`; do not treat the fixture's intentional failure as a project regression.
 
-## Verify the implementation
+## Verify locally or on a server
 
 ```sh
-uv run ruff check .
-uv run ruff format --check .
-uv run pytest -q                         # unit tests; Docker cases skipped
-CI_REPAIR_DOCKER_TESTS=1 uv run pytest -q  # also exercises real containers
+bash scripts/check.sh --colima  # macOS: full gate, automatically stops Colima
+bash scripts/check.sh           # Linux/server with Docker already running
+bash scripts/check.sh --unit    # fast checks; Docker acceptance cases skipped
 ```
 
-Docker integration tests use a scripted model and the real mini-SWE-agent loop.
-They verify orchestration and rejection of test modifications, not model repair
-ability. GitHub Actions runs these tests without API credentials. This is CI for
-this project, not automated repair integration for other repositories.
+GitHub Actions calls the same script. You do not need to push code before
+checking it. The full gate includes Docker repair/verification and local Git
+publication tests; no model API key is required. See [verification boundaries](docs/verification.md)
+for platform differences and what still requires a real GitHub service.
+
+The model CLI uses mini-SWE-agent's native `get_model()` factory. Use
+`--model-class litellm` (default) or `--model-class openrouter`; provider adapters,
+cost accounting and the agent loop remain upstream. For OpenRouter, set
+`OPENROUTER_API_KEY` and use its model name. See the [repository review](docs/review-2026-09-18.md)
+for the fixes, efficiency changes and remaining limits.
 
 For restricted local environments, set `UV_CACHE_DIR` and
 `MSWEA_GLOBAL_CONFIG_DIR` to writable directories.

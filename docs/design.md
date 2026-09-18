@@ -1,4 +1,7 @@
-# v0.1 design decision
+# v0.1 design decision (historical baseline)
+
+Current checks and boundaries: [verification](verification.md) and
+[repository review](review-2026-09-18.md).
 
 Use mini-SWE-agent 2.4.6's DefaultAgent, LitellmModel and DockerEnvironment.
 Upstream inspected: https://github.com/SWE-agent/mini-swe-agent at
