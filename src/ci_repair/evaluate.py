@@ -121,7 +121,9 @@ def evaluate_case(case: dict, output: Path, image: str, model, *, steps=30, cost
 def summarize(scores: list[dict]) -> dict:
     accepted = sum(s["accepted"] for s in scores)
     errors = sum(
-        s["gate_status"] in ("ERROR", "TIMEOUT") or s["oracle_status"] == "ERROR" for s in scores
+        s["gate_status"] in ("ERROR", "TIMEOUT", "BASELINE_NOT_REPRODUCED")
+        or s["oracle_status"] == "ERROR"
+        for s in scores
     )
     successes = sum(s["repair_success"] for s in scores)
     false_passes = sum(s["false_pass"] for s in scores)

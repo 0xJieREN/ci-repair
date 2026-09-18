@@ -143,7 +143,8 @@ def prepare(run_dir: Path, output: Path, base: str) -> dict:
         f"Verified baseline: `{report['commit']}`. Job: `{ci['job_id']}`; "
         f"attempt: `{ci['run_attempt']}`.\n\n"
         "The original failing command and configured regression command both passed "
-        "in separate fresh verification containers. Full logs and trajectories remain local.\n\n"
+        "after applying the patch in a fresh verification environment. "
+        "Full logs and trajectories remain local.\n\n"
         "This is a draft for review; passing these checks is not proof of complete correctness.\n"
     )
     (output / "body.md").write_text(body)

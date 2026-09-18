@@ -60,6 +60,7 @@ oracle and fixture preparation time. Deterministic controls have zero model cost
 - Repair success: the public gate accepts and the separate oracle passes.
 - False PASS: the public gate accepts but the oracle fails.
 - Oracle infrastructure errors remain unknown, not successful or safe passes.
+- An unreproduced baseline is an evaluation error, not a valid repair trial.
 - False-PASS rate uses accepted candidates with completed oracle outcomes as its
   denominator. Report error counts alongside rates.
 

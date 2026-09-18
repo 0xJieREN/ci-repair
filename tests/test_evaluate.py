@@ -62,3 +62,14 @@ def test_evaluation_controls(tmp_path, case_path, candidate, gate, oracle):
     assert not (tmp_path / "case/repo/oracle.py").exists()
     trajectory = (tmp_path / "case/repair/trajectory.json").read_text()
     assert "assert total(-2, 2)" not in trajectory
+
+
+def test_unreproduced_baseline_is_an_evaluation_error():
+    score = dict(
+        accepted=False,
+        gate_status="BASELINE_NOT_REPRODUCED",
+        oracle_status="NOT_RUN",
+        repair_success=False,
+        false_pass=False,
+    )
+    assert summarize([score])["errors"] == 1
