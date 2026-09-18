@@ -68,3 +68,13 @@ It is not needed for this repository's gate: its runner images differ from
 GitHub's and some Actions features are unsupported. No act dependency was added.
 See the official [runner guidance](https://nektosact.com/usage/runners.html) and
 [unsupported features](https://nektosact.com/not_supported.html).
+
+## Failure context
+
+The agent receives deterministic error windows with original log line ranges,
+Python/compiler file locations, and bounded raw head/tail excerpts. Recognized
+errors near the beginning no longer disappear behind a long cleanup tail.
+Repeated file locations are deduplicated. Unknown formats retain raw fallback;
+all extracted fields remain untrusted evidence, never executable instructions.
+This is a heuristic extractor, not complete language-aware parsing. Its effect
+on real repair success still needs paired model evaluation.

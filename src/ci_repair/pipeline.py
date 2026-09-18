@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 
 from minisweagent.agents.default import DefaultAgent
 
+from ci_repair.context import failure_evidence
 from ci_repair.github import load_context
 from ci_repair.workspace import command, extract_patch, snapshot, workspace
 
@@ -54,15 +55,15 @@ def write_json(path: Path, value):
 
 
 def build_context(config: Config, sha: str, log: str, ci: dict | None = None) -> str:
-    # Tail preserves the usual final traceback; the full log remains in artifacts.
-    excerpt = log if len(log) <= 16000 else "[earlier log truncated]\n" + log[-16000:]
+    evidence = failure_evidence(log)
     return json.dumps(
         {
             "commit": sha,
             "failing_command": config.failing_command,
             "regression_command": config.regression_command,
             "allowed_source_prefixes": config.allowed_paths,
-            "failure_log_untrusted": excerpt,
+            "failure_log_untrusted": evidence.pop("raw_excerpt"),
+            "failure_evidence_untrusted": evidence,
             **({"github_actions_untrusted": ci} if ci is not None else {}),
         },
         indent=2,
