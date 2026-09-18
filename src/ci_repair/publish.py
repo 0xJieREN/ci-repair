@@ -9,7 +9,7 @@ from pathlib import Path
 
 from ci_repair.github import CollectionError, api
 from ci_repair.pipeline import paths_allowed
-from ci_repair.workspace import command
+from ci_repair.workspace import checkout_commit, command
 
 
 class PublicationError(ValueError):
@@ -81,21 +81,20 @@ def require_base(url: str, base: str, expected: str):
 
 
 def prepare(run_dir: Path, output: Path, base: str) -> dict:
-    report, patch = verified_run(run_dir)
-    url = target(report, base)
-    require_base(url, base, report["commit"])
     if output.exists():
         raise PublicationError(
             "Preparation directory already exists; resume publish or use a new directory"
         )
+    report, patch = verified_run(run_dir)
+    url = target(report, base)
+    require_base(url, base, report["commit"])
     output.mkdir(parents=True, mode=0o700)
     checkout = output / "repo"
     command(
         ["gh", "repo", "clone", url, str(checkout), "--", "--no-checkout", "--depth=1"], timeout=180
     )
     command(["git", "config", "core.hooksPath", "/dev/null"], cwd=checkout)
-    command(["git", "fetch", "--depth=1", "origin", report["commit"]], cwd=checkout, timeout=180)
-    command(["git", "checkout", "--detach", report["commit"]], cwd=checkout)
+    checkout_commit(checkout, report["commit"])
     patch_path = output / "patch.diff"
     patch_path.write_bytes(patch)
     command(["git", "apply", "--index", "--binary", str(patch_path.resolve())], cwd=checkout)

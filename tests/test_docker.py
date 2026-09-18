@@ -18,28 +18,21 @@ pytestmark = [
 ]
 
 
-class ScriptedModel:
-    def __init__(self, script):
-        self.commands = iter([script, "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"])
+def scripted_model(script):
+    from minisweagent.models import get_model
+    from minisweagent.models.test_models import make_output
 
-    def query(self, messages):
-        return {
-            "role": "assistant",
-            "content": "scripted test action",
-            "extra": {"actions": [{"command": next(self.commands)}], "cost": 0.01},
-        }
-
-    def format_message(self, **kwargs):
-        return kwargs
-
-    def format_observation_messages(self, message, outputs, template_vars=None):
-        return [{"role": "user", "content": str(outputs)}]
-
-    def get_template_vars(self):
-        return {}
-
-    def serialize(self):
-        return {"info": {"test_model": "scripted, not a real model repair"}}
+    return get_model(
+        "deterministic",
+        config={
+            "model_class": "deterministic",
+            "cost_per_call": 0.01,
+            "outputs": [
+                make_output("scripted test action", [{"command": command}], cost=0.01)
+                for command in (script, "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT")
+            ],
+        },
+    )
 
 
 @pytest.mark.parametrize(
@@ -86,7 +79,7 @@ def test_fresh_verifier(tmp_path, script, expected):
         "python -m unittest discover -s tests -k test_positive_interval",
         "python -m unittest discover -s tests",
     )
-    report = run(cfg, ScriptedModel(script))
+    report = run(cfg, scripted_model(script))
     assert report["status"] == expected, report
     assert (
         report["patch_sha256"]
@@ -94,3 +87,23 @@ def test_fresh_verifier(tmp_path, script, expected):
     )
     assert "range(start, end)" in (repo / "src/ranges.py").read_text()
     assert (cfg.output / "trajectory.json").exists()
+
+
+def test_command_timeout_terminates_container_process(tmp_path):
+    from ci_repair.workspace import Sandbox
+
+    env = Sandbox(
+        image="ci-repair-demo:local",
+        cwd="/workspace",
+        timeout=1,
+        run_args=["--rm", "--network=none"],
+    )
+    try:
+        result = env.execute({"command": "sleep 2; touch /tmp/should-not-exist"})
+        assert result["returncode"] == 124
+        assert result["exception_info"]
+        # If only docker exec's client died, the delayed write would still happen.
+        check = env.execute({"command": "sleep 2; test ! -e /tmp/should-not-exist"}, timeout=4)
+        assert check["returncode"] == 0
+    finally:
+        env.cleanup()

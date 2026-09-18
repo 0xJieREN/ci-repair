@@ -62,6 +62,11 @@ def fake_git(monkeypatch):
         return b""
 
     monkeypatch.setattr(github, "command", command)
+    monkeypatch.setattr(
+        github,
+        "checkout_commit",
+        lambda repo, sha: command(["git", "checkout", "--detach", sha], cwd=repo),
+    )
     return calls
 
 
@@ -248,6 +253,11 @@ def test_pr_merge_collection_records_different_job_and_checkout_sha(tmp_path, mo
         return b"c" * 40 if args[:3] == ["git", "rev-parse", "HEAD"] else b""
 
     monkeypatch.setattr(github, "command", command)
+    monkeypatch.setattr(
+        github,
+        "checkout_commit",
+        lambda repo, sha: command(["git", "checkout", "--detach", sha], cwd=repo),
+    )
     result = collect("owner/repo", 7, tmp_path / "out", checkout_sha="c" * 40)
     assert result["commit"] == "c" * 40
     assert result["pull_request"]["head_sha"] == SHA
@@ -263,3 +273,11 @@ def test_fork_pr_rejected_even_if_run_head_repository_is_base():
     run["pull_requests"][0]["head"]["repo"]["id"] = 2
     with pytest.raises(CollectionError, match="Fork"):
         github.resolve_source("owner/repo", run, SHA)
+
+
+def test_explicit_attempt_avoids_loading_latest_metadata(tmp_path, monkeypatch):
+    calls = fake_api(monkeypatch)
+    fake_git(monkeypatch)
+    collect("owner/repo", 7, tmp_path / "out", attempt=1)
+    assert calls[0] == "repos/owner/repo/actions/runs/7/attempts/1"
+    assert "repos/owner/repo/actions/runs/7" not in calls

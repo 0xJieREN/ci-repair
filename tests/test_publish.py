@@ -224,7 +224,7 @@ def test_real_verifier_report_can_be_prepared_and_published(publication, monkeyp
 
     if os.getenv("CI_REPAIR_DOCKER_TESTS") != "1":
         pytest.skip("set CI_REPAIR_DOCKER_TESTS=1")
-    from test_docker import ScriptedModel
+    from test_docker import scripted_model
 
     from ci_repair.pipeline import Config
     from ci_repair.pipeline import run as repair
@@ -253,7 +253,7 @@ def test_real_verifier_report_can_be_prepared_and_published(publication, monkeyp
         "python -c 'from src.code import value; assert isinstance(value, int)'",
         ci_context=manifest,
     )
-    result = repair(cfg, ScriptedModel("printf 'value = 2\\n' > src/code.py"))
+    result = repair(cfg, scripted_model("printf 'value = 2\\n' > src/code.py"))
     assert result["status"] == "PASS", result
     pub.prepare(cfg.output, out, "main")
     assert pub.publish(out) == "https://github.com/owner/repo/pull/1"

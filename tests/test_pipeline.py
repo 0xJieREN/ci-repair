@@ -72,6 +72,8 @@ def test_snapshot_rejects_dirty_repo(tmp_path):
     [
         (0, b"patch", "src/a.py\0", 0, "BASELINE_NOT_REPRODUCED", 1),
         (-1, b"patch", "src/a.py\0", 0, "BASELINE_NOT_REPRODUCED", 1),
+        (124, b"patch", "src/a.py\0", 0, "BASELINE_NOT_REPRODUCED", 1),
+        (137, b"patch", "src/a.py\0", 0, "BASELINE_NOT_REPRODUCED", 1),
         (1, b"", "src/a.py\0", 0, "NO_PATCH", 2),
         (1, b"patch", "tests/test.py\0", 0, "PATCH_REJECTED", 3),
         (1, b"patch", "src/a.py\0", 1, "FAIL", 3),
@@ -148,3 +150,59 @@ def test_deadline_is_not_swallowed_and_report_is_saved(tmp_path, monkeypatch):
     report = run(cfg, object())
     assert report["status"] == "TIMEOUT"
     assert json.loads((cfg.output / "report.json").read_text())["verified"] is False
+
+
+def test_zero_exit_with_verifier_exception_cannot_pass(tmp_path, monkeypatch):
+    cfg = config(tmp_path)
+    phases = []
+
+    class Env:
+        def copy(self, *args):
+            pass
+
+        def checked(self, script):
+            if "--name-only" in script:
+                return "src/a.py\0"
+            if "--raw" in script:
+                return ":100644 100644 a b M\tsrc/a.py"
+            return ""
+
+        def execute(self, action):
+            if len(phases) == 1:
+                return {"returncode": 1, "output": "failure", "exception_info": ""}
+            return {
+                "returncode": 0,
+                "output": "ok",
+                "exception_info": "transport failure" if "test-all" in action["command"] else "",
+            }
+
+    @contextmanager
+    def factory(*args):
+        phases.append(True)
+        yield Env()
+
+    class Agent:
+        n_calls, cost = 0, 0
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def run(self, task):
+            return {"exit_status": "Submitted"}
+
+    monkeypatch.setattr(pipeline, "workspace", factory)
+    monkeypatch.setattr(pipeline, "snapshot", lambda *args: "abc")
+    monkeypatch.setattr(pipeline, "command", lambda *args: b"image")
+    monkeypatch.setattr(pipeline, "extract_patch", lambda *args: b"patch")
+    monkeypatch.setattr(pipeline, "DefaultAgent", Agent)
+    report = run(cfg, object())
+    assert report["status"] == "FAIL"
+    assert report["verified"] is False
+
+
+@pytest.mark.parametrize("cost", [float("nan"), float("inf"), 0, -1])
+def test_cost_budget_must_be_finite_and_positive(tmp_path, cost):
+    from dataclasses import replace
+
+    with pytest.raises(ValueError, match="finite"):
+        replace(config(tmp_path), cost=cost).validate()

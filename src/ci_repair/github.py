@@ -7,7 +7,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from ci_repair.workspace import command
+from ci_repair.workspace import checkout_commit, command
 
 
 class CollectionError(ValueError):
@@ -102,9 +102,8 @@ def collect(
     if output.exists():
         raise CollectionError("Output already exists; choose a new directory")
     base = f"repos/{repository}/actions/runs/{run_id}"
-    latest = json.loads(api(base))
-    attempt = attempt or latest["run_attempt"]
-    run = json.loads(api(f"{base}/attempts/{attempt}"))
+    run = json.loads(api(base if attempt is None else f"{base}/attempts/{attempt}"))
+    attempt = attempt or run["run_attempt"]
     if run["status"] != "completed" or run["conclusion"] != "failure":
         raise CollectionError("Only completed failed runs are supported")
     sha, source = resolve_source(repository, run, checkout_sha)
@@ -156,8 +155,7 @@ def collect(
         ],
         timeout=180,
     )
-    command(["git", "fetch", "--depth=1", "origin", sha], cwd=checkout, timeout=180)
-    command(["git", "checkout", "--detach", sha], cwd=checkout)
+    checkout_commit(checkout, sha)
     actual = command(["git", "rev-parse", "HEAD"], cwd=checkout).decode().strip()
     if actual != sha:
         raise CollectionError("Checkout does not match the failing commit")

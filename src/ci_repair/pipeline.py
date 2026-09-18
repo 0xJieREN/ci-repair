@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 import signal
 import time
 from dataclasses import asdict, dataclass
@@ -33,8 +34,9 @@ class Config:
     ci_context: Path | None = None
 
     def validate(self):
-        if min(self.steps, self.cost, self.wall_seconds, self.command_seconds) <= 0:
-            raise ValueError("All budgets must be positive")
+        budgets = (self.steps, self.cost, self.wall_seconds, self.command_seconds)
+        if not all(math.isfinite(value) and value > 0 for value in budgets):
+            raise ValueError("All budgets must be finite and positive")
         if not self.failing_command.strip() or not self.regression_command.strip():
             raise ValueError("Both verification commands are required")
         if not self.allowed_paths:
@@ -105,23 +107,23 @@ def run(config: Config, model) -> dict:
         archive = config.output / "source.tar"
         sha = snapshot(config.repo, archive)
         report["commit"] = sha
-        image = (
-            command(["docker", "image", "inspect", "--format={{.Id}}", config.image])
-            .decode()
-            .strip()
-        )
-        report["image_id"] = image
         raw_log = config.failure_log.read_bytes()
         ci = load_context(config.ci_context, sha, raw_log) if config.ci_context else None
         if ci is not None:
             report["github_actions"] = ci
         log = raw_log.decode(errors="replace")
         (config.output / "failure.log").write_text(log)
+        image = (
+            command(["docker", "image", "inspect", "--format={{.Id}}", config.image])
+            .decode()
+            .strip()
+        )
+        report["image_id"] = image
         context = build_context(config, sha, log, ci)
         (config.output / "context.json").write_text(context + "\n")
         with workspace(archive, image, config.command_seconds, config.wall_seconds) as env:
             baseline = run_test(env, config.failing_command, config.output / "baseline.json")
-        if baseline["returncode"] in (0, -1, 126, 127) or baseline.get("exception_info"):
+        if baseline["returncode"] in (0, -1, 124, 126, 127, 137) or baseline.get("exception_info"):
             report["status"] = "BASELINE_NOT_REPRODUCED"
             return report
         with workspace(archive, image, config.command_seconds, config.wall_seconds) as env:
@@ -172,7 +174,9 @@ def run(config: Config, model) -> dict:
                 if result["returncode"] != 0 or result.get("exception_info"):
                     break
             report["tests"] = results
-            report["verified"] = len(results) == 2 and all(r["returncode"] == 0 for r in results)
+            report["verified"] = len(results) == 2 and all(
+                r["returncode"] == 0 and not r.get("exception_info") for r in results
+            )
             report["status"] = "PASS" if report["verified"] else "FAIL"
     except (Exception, RunDeadline) as exc:
         report["status"] = "TIMEOUT" if isinstance(exc, RunDeadline) else "ERROR"

@@ -24,7 +24,13 @@ def main():
     parser.add_argument(
         "--env-file", type=Path, help="Explicit local dotenv file (never committed)"
     )
-    parser.add_argument("--model", required=True, help="LiteLLM provider/model")
+    parser.add_argument("--model", required=True, help="Upstream adapter model name")
+    parser.add_argument(
+        "--model-class",
+        choices=("litellm", "openrouter"),
+        default="litellm",
+        help="mini-SWE-agent tool-calling adapter",
+    )
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--steps", type=int, default=30)
     parser.add_argument("--cost", type=float, default=1.0)
@@ -61,15 +67,25 @@ def main():
     if os.getenv("ANTHROPIC_AUTH_TOKEN") and not os.getenv("ANTHROPIC_API_KEY"):
         os.environ["ANTHROPIC_API_KEY"] = os.environ["ANTHROPIC_AUTH_TOKEN"]
     os.environ["MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT"] = "1"
-    from minisweagent.models.litellm_model import LitellmModel
+    from minisweagent.models import get_model
 
-    model = LitellmModel(
-        model_name=args.model,
-        cost_tracking="default",
-        observation_template="returncode={{output.returncode}}\n{{output.output[:12000]}}\n"
-        "{% if output.output|length > 12000 %}[output truncated]{% endif %}"
-        "{{output.exception_info}}",
-        model_kwargs={"timeout": min(90, args.wall_seconds), "num_retries": 0, "max_tokens": 4096},
+    model_kwargs = {"max_tokens": 4096}
+    if args.model_class == "litellm":
+        model_kwargs.update(timeout=min(90, args.wall_seconds), num_retries=0)
+    model = get_model(
+        args.model,
+        config={
+            "model_class": args.model_class,
+            "cost_tracking": "default",
+            # Preserve failure tails without feeding unbounded command output into the model.
+            "observation_template": "returncode={{output.returncode}}\n"
+            "{% if output.output|length <= 12000 %}{{output.output}}{% else %}"
+            "{{output.output[:6000]}}\n[output truncated]\n{{output.output[-6000:]}}{% endif %}"
+            "\n{{output.exception_info}}",
+            "model_kwargs": model_kwargs,
+            # Read at call time, not the upstream class's import-time environment default.
+            "litellm_model_registry": os.getenv("LITELLM_MODEL_REGISTRY_PATH"),
+        },
     )
     report = run(config, model)
     print(f"{report['status']}: {config.output / 'report.json'}")
