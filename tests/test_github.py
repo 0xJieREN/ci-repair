@@ -181,3 +181,11 @@ def test_mismatched_context_stops_pipeline_before_sandbox(tmp_path, monkeypatch)
     assert result["status"] == "ERROR"
     assert result["error_type"] == "CollectionError"
     assert "model_calls" not in result
+
+
+def test_only_log_api_allows_raw_escape_sequences(monkeypatch):
+    calls = fake_git(monkeypatch)
+    github.api("repos/owner/repo/actions/jobs/12/logs")
+    github.api("repos/owner/repo/actions/runs/7")
+    assert "--allow-escape-sequences" in calls[0]
+    assert "--allow-escape-sequences" not in calls[1]

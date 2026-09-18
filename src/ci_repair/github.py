@@ -15,7 +15,16 @@ class CollectionError(ValueError):
 
 
 def api(endpoint: str) -> bytes:
-    return command(["gh", "api", "--hostname", "github.com", endpoint], timeout=120)
+    args = ["gh", "api", "--hostname", "github.com", endpoint]
+    if endpoint.endswith("/logs"):
+        # Capture to a private file, never render raw log escape sequences to a terminal.
+        args.append("--allow-escape-sequences")
+    try:
+        return command(args, timeout=120)
+    except subprocess.CalledProcessError as exc:
+        raise CollectionError(
+            f"GitHub request failed: {endpoint}; check gh authentication and log availability"
+        ) from exc
 
 
 def select_job(jobs: list[dict], job_id: int | None) -> dict:
