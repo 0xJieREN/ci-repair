@@ -126,3 +126,8 @@ trees. Run it with the same evaluator and either runner. See the
 Do not combine its results with the six-case synthetic baseline without naming
 and stratifying the corpora. Historical manifests and embedded shell commands
 are reviewed benchmark inputs, not untrusted auto-generated plans.
+
+The first [historical model pilot](experiments/2026-09-19-historical-deepseek.md)
+completed four trials with 37/40 authorized calls. Both runners produced 2/2
+verified patches; three trials reached their call cap before explicit submission.
+The report distinguishes verified patches from agents that submitted themselves.

@@ -145,3 +145,15 @@ repair PR integration remain outside v0.1. Run artifacts and secrets stay local.
 - No external model calls were made. See [control evidence and limitations](
   experiments/2026-09-19-historical-controls.md). Real-model evaluation of this
   separate corpus requires a separately authorized experiment budget.
+
+## First historical model experiment (2026-09-19)
+
+- Separately authorized four DeepSeek trials, at most 10 calls each / 40 total.
+  Completed with **37 calls**, estimated USD **0.024594576**.
+- Both runners produced **2/2 verified patches**, with no observed false PASS or
+  evaluator error. Three runs reached `LimitsExceeded`; only CI Repair's zip
+  trial explicitly submitted (7 calls). Verification success and autonomous
+  submission are reported separately, rather than hiding this distinction.
+- Source archives, model configurations and patch hashes were checked; no
+  configured credential values were found in artifacts. Colima is `Stopped`.
+- [Full results and caveats](experiments/2026-09-19-historical-deepseek.md).
