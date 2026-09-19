@@ -33,6 +33,7 @@ class Config:
     wall_seconds: int = 600
     command_seconds: int = 60
     ci_context: Path | None = None
+    task: str = ""
 
     def validate(self):
         budgets = (self.steps, self.cost, self.wall_seconds, self.command_seconds)
@@ -59,6 +60,7 @@ def build_context(config: Config, sha: str, log: str, ci: dict | None = None) ->
     return json.dumps(
         {
             "commit": sha,
+            **({"task": config.task} if config.task else {}),
             "failing_command": config.failing_command,
             "regression_command": config.regression_command,
             "allowed_source_prefixes": config.allowed_paths,
@@ -89,6 +91,40 @@ def run_test(env, script: str, output: Path) -> dict:
     record = {"command": script, **result, "duration_seconds": time.monotonic() - start}
     write_json(output, record)
     return record
+
+
+def verify_patch(config: Config, archive: Path, image: str, patch_path: Path) -> dict:
+    """Public acceptance gate, also used as a common external evaluator."""
+    report = {}
+    results = []
+    for name, script in [
+        ("failing", config.failing_command),
+        ("regression", config.regression_command),
+    ]:
+        with workspace(archive, image, config.command_seconds, config.wall_seconds) as env:
+            env.copy(patch_path, "/tmp/repair.diff")
+            env.checked("git apply --index --binary /tmp/repair.diff")
+            paths = env.checked("git diff --cached --name-only -z").rstrip("\0").split("\0")
+            report["changed_files"] = paths
+            raw = env.checked("git diff --cached --raw --no-abbrev")
+            # Only ordinary file additions/deletions/modifications; no symlinks/gitlinks.
+            modes_ok = all(
+                all(mode in ("000000", "100644", "100755") for mode in line[1:].split()[:2])
+                for line in raw.splitlines()
+            )
+            if not paths_allowed(paths, config.allowed_paths) or not modes_ok:
+                report["status"] = "PATCH_REJECTED"
+                return report
+            result = run_test(env, script, config.output / f"{name}.json")
+        results.append(result)
+        report["tests"] = results
+        if result["returncode"] != 0 or result.get("exception_info"):
+            break
+    report["verified"] = len(results) == 2 and all(
+        r["returncode"] == 0 and not r.get("exception_info") for r in results
+    )
+    report["status"] = "PASS" if report["verified"] else "FAIL"
+    return report
 
 
 def run(config: Config, model) -> dict:
@@ -151,34 +187,7 @@ def run(config: Config, model) -> dict:
         if not patch:
             report["status"] = "NO_PATCH"
             return report
-        results = []
-        for name, script in [
-            ("failing", config.failing_command),
-            ("regression", config.regression_command),
-        ]:
-            with workspace(archive, image, config.command_seconds, config.wall_seconds) as env:
-                env.copy(config.output / "patch.diff", "/tmp/repair.diff")
-                env.checked("git apply --index --binary /tmp/repair.diff")
-                paths = env.checked("git diff --cached --name-only -z").rstrip("\0").split("\0")
-                report["changed_files"] = paths
-                raw = env.checked("git diff --cached --raw --no-abbrev")
-                # Only ordinary file additions/deletions/modifications; no symlinks/gitlinks.
-                modes_ok = all(
-                    all(mode in ("000000", "100644", "100755") for mode in line[1:].split()[:2])
-                    for line in raw.splitlines()
-                )
-                if not paths_allowed(paths, config.allowed_paths) or not modes_ok:
-                    report["status"] = "PATCH_REJECTED"
-                    return report
-                result = run_test(env, script, config.output / f"{name}.json")
-            results.append(result)
-            report["tests"] = results
-            if result["returncode"] != 0 or result.get("exception_info"):
-                break
-        report["verified"] = len(results) == 2 and all(
-            r["returncode"] == 0 and not r.get("exception_info") for r in results
-        )
-        report["status"] = "PASS" if report["verified"] else "FAIL"
+        report.update(verify_patch(config, archive, image, config.output / "patch.diff"))
     except (Exception, RunDeadline) as exc:
         report["status"] = "TIMEOUT" if isinstance(exc, RunDeadline) else "ERROR"
         # Avoid serializing provider exceptions: these can contain request credentials.
