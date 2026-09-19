@@ -113,6 +113,10 @@ for control runs, per-trial budgets and the limits of these measurements.
 Use `--runner both --repetitions 3` for a paired CI Repair/upstream comparison;
 paid experiments also require an explicit `--max-total-calls` ceiling.
 
+A separate [historical seed corpus](benchmarks/historical/README.md) replays two
+real more-itertools bugs from complete pinned upstream repositories, with
+reference-fix/no-op controls and the original upstream regression suites.
+
 ## Reviewed replay plans
 
 `ci-repair-plan COLLECTION --output PLAN.json` creates a review-only draft from

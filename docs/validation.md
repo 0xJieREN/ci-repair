@@ -132,3 +132,16 @@ repair PR integration remain outside v0.1. Run artifacts and secrets stay local.
 - See [experiment report](experiments/2026-09-19-upstream-baseline.md) and its
   sanitized per-trial CSV. This is a small synthetic result, not proof of a
   success-rate advantage or production readiness.
+
+## Historical corpus admission (2026-09-19)
+
+- Added two full-repository more-itertools historical cases, with immutable
+  source/fix commits and upstream-diff verification before Docker execution.
+- Original public and hidden checks fail; all four reference controls (two cases
+  times two runners) pass. Both runners reject all four no-op controls.
+- Reference fixes pass the original 907-test and 914-test upstream suites.
+- Local `scripts/check.sh --colima` passed **119 tests**, Ruff and diff checks.
+  Colima was independently verified `Stopped` after each Docker batch.
+- No external model calls were made. See [control evidence and limitations](
+  experiments/2026-09-19-historical-controls.md). Real-model evaluation of this
+  separate corpus requires a separately authorized experiment budget.

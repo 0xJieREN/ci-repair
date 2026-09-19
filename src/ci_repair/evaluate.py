@@ -1,4 +1,4 @@
-"""Small synthetic evaluation corpus with an oracle hidden from repair containers."""
+"""Synthetic and pinned historical evaluation corpora with an oracle hidden from repair containers."""
 
 import argparse
 import hashlib
@@ -20,8 +20,15 @@ from ci_repair.workspace import command, snapshot, workspace
 
 def load_case(path: Path) -> dict:
     case = json.loads(path.read_text())
-    if case.get("schema_version") != 1 or not re.fullmatch(r"[a-z0-9-]+", case.get("id", "")):
+    if case.get("schema_version") not in (1, 2) or not re.fullmatch(
+        r"[a-z0-9-]+", case.get("id", "")
+    ):
         raise ValueError("Invalid evaluation case")
+    if case["schema_version"] == 2:
+        from ci_repair.historical import validate_historical
+
+        validate_historical(case)
+        return case
     for field in ("category", "broken", "correct", "overfit", "public", "oracle"):
         if not isinstance(case.get(field), str) or not case[field].strip():
             raise ValueError(f"Missing case field: {field}")
@@ -34,7 +41,11 @@ def control_model(case: dict, candidate: str):
     from minisweagent.models.test_models import make_output
 
     script = "true"
-    if candidate != "noop":
+    if case["schema_version"] == 2 and candidate != "noop":
+        if candidate != "correct":
+            raise ValueError("Historical cases support correct and noop controls only")
+        script = f"printf %s {shlex.quote(case['reference_patch'])} | git apply --binary"
+    elif candidate != "noop":
         script = f"printf %s {shlex.quote(case[candidate])} > src/app.py"
     return get_model(
         "deterministic",
@@ -51,6 +62,10 @@ def control_model(case: dict, candidate: str):
 
 def prepare_case(case: dict, output: Path, image: str, *, command_seconds=60) -> Config:
     """One clean source commit and one captured failure, reused by every paired trial."""
+    if case["schema_version"] == 2:
+        from ci_repair.historical import prepare_historical
+
+        return prepare_historical(case, output, image, command_seconds)
     output.mkdir(parents=True, exist_ok=False)
     repo = output / "repo"
     (repo / "src").mkdir(parents=True)
@@ -342,7 +357,7 @@ def save_summary(output: Path, manifest: dict, scores: list[dict]):
             + " | ".join(avg)
             + " |\n"
         )
-    text += "\nSix synthetic cases; repeated trials are not independent new cases. See experiment.json for the comparison contract.\n"
+    text += "\nRepeated trials are not independent new cases; consult the pinned case manifests for corpus scope. See experiment.json for the comparison contract.\n"
     (output / "comparison.md").write_text(text)
 
 
@@ -375,6 +390,8 @@ def main():
     cases = [load_case(p) for p in sorted(args.cases.glob("*.json"))]
     if not cases or len({c["id"] for c in cases}) != len(cases):
         parser.error("Cases must be nonempty and have unique IDs")
+    if args.control == "overfit" and any(c["schema_version"] == 2 for c in cases):
+        parser.error("Historical cases support correct and noop controls only")
     runners = ["ci-repair", "upstream"] if args.runner == "both" else [args.runner]
     trials = schedule(cases, runners, args.repetitions)
     planned_calls = len(trials) * args.steps

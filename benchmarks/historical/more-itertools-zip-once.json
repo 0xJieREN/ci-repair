@@ -1,0 +1,19 @@
+{
+  "schema_version": 2,
+  "id": "more-itertools-zip-once",
+  "category": "historical-library-bug",
+  "repository": "https://github.com/more-itertools/more-itertools.git",
+  "base_commit": "9ed3dbb0ae527230cd156d91d0af305478558fba",
+  "fix_commit": "e426d256b90bcef9aa4509ea345fca68ff21ae0c",
+  "source_url": "https://github.com/more-itertools/more-itertools/pull/1278",
+  "allowed_paths": [
+    "more_itertools/"
+  ],
+  "regression_command": "python -m unittest discover -s tests -q",
+  "reference_patch": "diff --git a/more_itertools/more.py b/more_itertools/more.py\nindex d435c2e..c850a73 100755\n--- a/more_itertools/more.py\n+++ b/more_itertools/more.py\n@@ -4671,15 +4671,13 @@ def zip_broadcast(*objects, scalar_types=(str, bytes), strict=False):\n     different lengths.\n     \"\"\"\n \n-    def is_scalar(obj):\n+    def get_iterator(obj):\n         if scalar_types and isinstance(obj, scalar_types):\n-            return True\n+            return None\n         try:\n-            iter(obj)\n+            return iter(obj)\n         except TypeError:\n-            return True\n-        else:\n-            return False\n+            return None\n \n     size = len(objects)\n     if not size:\n@@ -4688,10 +4686,11 @@ def zip_broadcast(*objects, scalar_types=(str, bytes), strict=False):\n     new_item = [None] * size\n     iterables, iterable_positions = [], []\n     for i, obj in enumerate(objects):\n-        if is_scalar(obj):\n+        iterator = get_iterator(obj)\n+        if iterator is None:\n             new_item[i] = obj\n         else:\n-            iterables.append(iter(obj))\n+            iterables.append(iterator)\n             iterable_positions.append(i)\n \n     if not iterables:\n",
+  "reference_patch_sha256": "e8105a76449342298bd0abf2ef83b72ffca7f2972c263ac02f791204d8e7fc61",
+  "public": "from more_itertools import zip_broadcast\nclass Once:\n    opened = False\n    def __iter__(self):\n        if self.opened:\n            raise RuntimeError(\"input opened twice\")\n        self.opened = True\n        return iter([1, 2])\nassert list(zip_broadcast(\"label\", Once())) == [(\"label\", 1), (\"label\", 2)]\n",
+  "oracle": "from more_itertools import zip_broadcast\nclass Counted:\n    def __init__(self, values):\n        self.values, self.calls = values, 0\n    def __iter__(self):\n        self.calls += 1\n        assert self.calls == 1, \"iterator acquired repeatedly\"\n        return iter(self.values)\nfor strict in (False, True):\n    for values in ([], [4], [3, 8, 9]):\n        source = Counted(values)\n        assert list(zip_broadcast(7, source, \"x\", strict=strict)) == [(7, v, \"x\") for v in values]\n        assert source.calls == 1\nassert list(zip_broadcast([1, 2], [3])) == [(1, 3)]\ntry:\n    list(zip_broadcast([1, 2], [3], strict=True))\nexcept ValueError:\n    pass\nelse:\n    raise AssertionError(\"strict length mismatch must fail\")\nassert list(zip_broadcast(\"ab\", [1, 2], scalar_types=None)) == [(\"a\", 1), (\"b\", 2)]\n",
+  "baseline_diagnostic": "RuntimeError: input opened twice",
+  "task": "zip_broadcast should acquire each input iterator only once. Support one-shot iterables while preserving scalar broadcasting, strict length checks and scalar_types behavior."
+}

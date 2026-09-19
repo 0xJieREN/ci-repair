@@ -115,3 +115,14 @@ and freeze an evaluation split before tuning prompts based on these results.
 
 Upstream sources: [DefaultAgent](https://github.com/SWE-agent/mini-swe-agent/blob/v2.4.6/src/minisweagent/agents/default.py),
 [mini.yaml](https://github.com/SWE-agent/mini-swe-agent/blob/v2.4.6/src/minisweagent/config/mini.yaml).
+
+## Historical repository cases
+
+`benchmarks/historical` is a separate schema-v2 seed corpus. It currently pins
+two real more-itertools bug/fix pairs and keeps their complete original source
+trees. Run it with the same evaluator and either runner. See the
+[corpus protocol and commands](../benchmarks/historical/README.md) and
+[initial control validation](experiments/2026-09-19-historical-controls.md).
+Do not combine its results with the six-case synthetic baseline without naming
+and stratifying the corpora. Historical manifests and embedded shell commands
+are reviewed benchmark inputs, not untrusted auto-generated plans.
