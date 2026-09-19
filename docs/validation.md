@@ -117,3 +117,18 @@ repair PR integration remain outside v0.1. Run artifacts and secrets stay local.
 - Colima was stopped and Stopped status confirmed after each Docker session.
 - Real model comparison against an upstream mini-SWE baseline and expansion to
   20–50 representative failures remain future experiments, not completed evidence.
+
+# Paired upstream evaluation — 2026-09-19
+
+- Added an upstream DefaultAgent/stock-prompt runner and a common external grader;
+  pinned fixture commits, captured real failure logs, paired scheduling and total
+  call preflight checks. Evaluation errors now have an explicit valid denominator.
+- Corrected upstream host-platform leakage into Docker prompt variables. Final
+  local full gate and GitHub Linux CI passed **108 tests**.
+- Completed 36 valid DeepSeek trials: both runners **18/18 success**, zero false
+  PASS and zero infrastructure errors. Effective identical limit: 8 calls/trial.
+- Used 180 calls in the valid batch; including the invalidated platform pilot,
+  total attempted calls were 251, within the authorized 360. Colima is stopped.
+- See [experiment report](experiments/2026-09-19-upstream-baseline.md) and its
+  sanitized per-trial CSV. This is a small synthetic result, not proof of a
+  success-rate advantage or production readiness.
