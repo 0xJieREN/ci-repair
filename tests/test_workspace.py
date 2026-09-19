@@ -58,3 +58,20 @@ def test_checkout_fetches_only_missing_commits(tmp_path, monkeypatch, available)
     workspace.checkout_commit(tmp_path, "a" * 40)
     assert any(c[1] == "fetch" for c in calls) is not available
     assert calls[-1] == ["git", "checkout", "--detach", "a" * 40]
+
+
+def test_sandbox_templates_use_cached_container_platform():
+    from types import SimpleNamespace
+
+    env = workspace.Sandbox.__new__(workspace.Sandbox)
+    env.config = SimpleNamespace(model_dump=lambda: {"cwd": "/workspace"})
+    calls = []
+
+    def checked(script):
+        calls.append(script)
+        return "Linux\ncontainer\n6.1\nLinux kernel\naarch64\n"
+
+    env.checked = checked
+    assert env.get_template_vars()["system"] == "Linux"
+    assert env.get_template_vars()["machine"] == "aarch64"
+    assert len(calls) == 1

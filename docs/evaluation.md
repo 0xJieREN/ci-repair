@@ -22,7 +22,9 @@ Both use the same hardened Docker environment and native LiteLLM adapter
 configuration (including observation formatting, max output tokens and disabled
 retries). The upstream comparison is therefore **an upstream agent/prompt baseline
 inside a common harness**, not an untouched interactive `mini` CLI installation.
-Prompt file hash, package versions and these adaptations are recorded.
+Prompt file hash, package versions and these adaptations are recorded. Container
+platform information is queried inside Docker rather than copied from the host;
+otherwise a macOS host would incorrectly activate upstream BSD sed guidance.
 
 A case is prepared once. Both runners receive the exact same clean Git commit,
 real captured failing output, image ID, task, allowed paths and step/cost/wall

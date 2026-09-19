@@ -5,6 +5,7 @@ import shlex
 import subprocess
 import tarfile
 from contextlib import contextmanager
+from functools import cached_property
 from pathlib import Path
 
 from minisweagent.environments.docker import DockerEnvironment
@@ -83,6 +84,18 @@ def snapshot(repo: Path, archive: Path) -> str:
 
 class Sandbox(DockerEnvironment):
     """Keep mini's execution API; make teardown synchronous and portable."""
+
+    @cached_property
+    def container_platform(self) -> dict:
+        values = self.checked(
+            "uname -s && uname -n && uname -r && uname -v && uname -m"
+        ).splitlines()
+        return dict(zip(("system", "node", "release", "version", "machine"), values, strict=True))
+
+    def get_template_vars(self, **kwargs) -> dict:
+        # Upstream DockerEnvironment uses host platform.uname(); templates must describe
+        # the environment where commands run (especially GNU versus BSD command syntax).
+        return {**self.config.model_dump(), **self.container_platform, **kwargs}
 
     def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict:
         seconds = timeout or self.config.timeout

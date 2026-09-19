@@ -84,6 +84,8 @@ def test_evaluation_controls(tmp_path, case_path, candidate, gate, oracle, runne
             json.loads(trajectory)["info"]["config"]["agent"]["system_template"]
             == prompts["system_template"]
         )
+        assert "Linux" in json.loads(trajectory)["messages"][1]["content"]
+        assert "You are on MacOS" not in json.loads(trajectory)["messages"][1]["content"]
         assert score["runner_verified"] is None
         assert not (tmp_path / "case/repair/baseline.json").exists()
         assert not (tmp_path / "case/repair/failing.json").exists()

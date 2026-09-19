@@ -109,7 +109,9 @@ For restricted local environments, set `UV_CACHE_DIR` and
 
 Six fixed synthetic cases and hidden-oracle controls are available through
 `uv run python -m ci_repair.evaluate`. See [evaluation protocol](docs/evaluation.md)
-for control runs, per-case budgets and the limits of these measurements.
+for control runs, per-trial budgets and the limits of these measurements.
+Use `--runner both --repetitions 3` for a paired CI Repair/upstream comparison;
+paid experiments also require an explicit `--max-total-calls` ceiling.
 
 ## Reviewed replay plans
 
