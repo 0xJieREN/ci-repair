@@ -1,11 +1,43 @@
 # CI Repair
 
-A small local CI repair pipeline around **mini-SWE-agent**, with an independent
-Docker verifier. Alpha: local repair, GitHub Actions failure import, reviewed replay
-plans, structured failure context, synthetic evaluation, and explicit draft PR
-publication. No automatic triggers or merging.
+A small CI repair system around **mini-SWE-agent**, with an independent Docker
+verifier. Alpha: GitHub webhook intake, run-level collection of every failed job,
+automatic CI environment reconstruction, a deterministic operator policy, bounded
+repair with system-decided stopping, fresh-environment verification of one
+cumulative patch, and gated draft PR publication. Never merges.
 
-See [design](docs/design.md) for acceptance criteria and boundaries.
+Start with the [repair lifecycle](docs/lifecycle.md). See also [policy](docs/policy.md),
+[environment reconstruction](docs/environment.md) and the historical
+[v0.1 design](docs/design.md).
+
+```text
+CI failure → webhook → canonical admission → collect all failed jobs
+→ reconstruct + build environment → policy → repair (ordered, cumulative)
+→ verify → publication gate → Draft PR (ALLOW) or REVIEW_REQUIRED
+```
+
+## Automatic flow
+
+```sh
+cp config/policy.example.yaml ~/ci-repair-policy.yaml   # keep it outside repositories
+export CI_REPAIR_WEBHOOK_SECRET=...                     # the GitHub webhook secret
+uv run ci-repair-webhook serve --state-dir ~/ci-repair-state \
+  --policy ~/ci-repair-policy.yaml --env-file .env
+```
+
+The same steps can be run by hand for one run:
+
+```sh
+uv run ci-repair-github OWNER/REPO RUN_ID --all-jobs --output runs/run-import
+uv run ci-repair-run runs/run-import --policy ~/ci-repair-policy.yaml --env-file .env \
+  --output runs/run-repair
+uv run ci-repair-pr auto runs/run-repair --policy ~/ci-repair-policy.yaml \
+  --output runs/run-publication   # draft PR only if the gate says ALLOW
+```
+
+Automatic draft publication is off unless the policy sets `publication.draft_pr:
+ALLOW`; read the branch-workflow secrets caveat in the [lifecycle](docs/lifecycle.md)
+first.
 
 ## Import GitHub Actions failures
 
@@ -16,8 +48,9 @@ for supported events, job selection and connection to the repair pipeline.
 ## Prepare and publish repair PRs
 
 Use `ci-repair-pr prepare` to produce a local commit and reviewable PR body, then
-`ci-repair-pr publish` to explicitly create a draft PR. PR inputs require an
-explicit checkout SHA; moved branches and changed patches are rejected.
+`ci-repair-pr publish` to explicitly create a draft PR, or `ci-repair-pr auto` to
+do both only when the deterministic publication gate says ALLOW. Moved branches
+and changed patches are rejected; DENY blocks every path.
 See [PR provenance and publication](docs/pull-requests.md) for the complete flow
 and current limits, including head-only publication and no fork support.
 
@@ -73,8 +106,10 @@ MiniMax's Anthropic interface, set `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN
 [official pricing table](https://platform.minimax.io/docs/guides/pricing-paygo).
 
 `runs/<id>/report.json` is authoritative: only `PASS` exits zero. It records
-baseline commit, exact local image ID, test outputs, changed files, duration,
-model calls and estimated cost. `patch.diff`, `trajectory.json`, `context.json`,
+baseline commit, exact local image ID, test outputs, changed files, `stop_reason`
+and `agent_exit`, requested/policy/effective budgets and actual usage (models,
+calls, steps, cost, command and wall time). Add `--policy FILE` to apply an
+operator policy; budget flags are requests clamped to its maxima. `patch.diff`, `trajectory.json`, `context.json`,
 `failure.log`, `source.tar` and individual test records remain local and ignored
 by Git. The input repository is never edited. Apply a successful patch manually
 after reviewing it. Unexpected provider errors record their type; details may

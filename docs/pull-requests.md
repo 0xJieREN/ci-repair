@@ -1,9 +1,9 @@
-# v0.3: PR provenance and draft repair publication
+# PR provenance and draft repair publication
 
-This version adds explicit PR checkout provenance and a two-step publication
-command. Collection and repair never publish automatically. Fork PRs,
-`pull_request_target`, automatic merge, webhooks and automatic retries remain
-outside this version.
+v0.3 added explicit PR checkout provenance and a two-step publication command.
+v0.4 adds a deterministic publication gate and `ci-repair-pr auto` (see below).
+Fork PRs, `pull_request_target`, automatic merge and automatic retries remain
+unsupported.
 
 ## Collect a PR run
 
@@ -92,3 +92,25 @@ Sources checked 2026-09-18:
 [GitHub PR workflow semantics](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request),
 [workflow-run metadata](https://docs.github.com/en/rest/actions/workflow-runs),
 [gh draft PR creation](https://cli.github.com/manual/gh_pr_create).
+
+## Publication gate (v0.4)
+
+`publication_gate` combines verified evidence with the current
+[policy](policy.md) into ALLOW / REVIEW / DENY. Inputs: patch categories and
+size, `publication.draft_pr`/`require_human_review`, the trigger allowlist for
+repository/event/branch, the stop reason, and, for orchestrated runs, each job's
+environment status, architecture mismatch and baseline-vs-CI-log evidence.
+Manual single-job runs are always REVIEW because their environment was
+configured by hand.
+
+| Verdict | `prepare` | `publish` (operator) | `auto` |
+|---|---|---|---|
+| ALLOW | yes | yes | prepares and creates the draft PR |
+| REVIEW | yes | yes: the operator is the reviewer | stops with `REVIEW_REQUIRED`, no remote writes |
+| DENY | refused | refused | stops with `DENIED` |
+
+`publish` re-evaluates the gate with the current policy; `publication.json`,
+`published.json` and the PR body record the verdict and reasons. The PR body
+also lists per-job results, final verification, environment fidelity, stop
+reason, model calls and estimated cost. `auto` targets the run's head branch;
+merge-checkout PR repairs stay unpublishable.

@@ -1,5 +1,11 @@
 # v0.2: import a failed GitHub Actions job
 
+Since v0.4, `--all-jobs` collects every failed job of the attempt (one shared
+checkout, `run.json`, per-job logs and manifests with step conclusions and runner
+labels) for `ci-repair-run`. For PR runs the checkout SHA may be derived from the
+checkout step's log when all failed jobs agree; it is still verified against the
+API exactly as an explicit `--checkout-sha`. See the [lifecycle](lifecycle.md).
+
 The next slice after the local MVP is read-only Actions collection. Run it
 manually; it does not create branches, PRs, comments, or webhook services.
 The existing mini-SWE-agent loop and independent verifier remain unchanged.

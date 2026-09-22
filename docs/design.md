@@ -1,7 +1,8 @@
 # v0.1 design decision (historical baseline)
 
-Current checks and boundaries: [verification](verification.md) and
-[repository review](review-2026-09-18.md).
+Current system: [repair lifecycle](lifecycle.md). Checks and boundaries:
+[verification](verification.md) and [repository review](review-2026-09-18.md).
+Webhooks, repair PRs and multi-job runs, deferred below, exist since v0.3/v0.4.
 
 Use mini-SWE-agent 2.4.6's DefaultAgent, LitellmModel and DockerEnvironment.
 Upstream inspected: https://github.com/SWE-agent/mini-swe-agent at

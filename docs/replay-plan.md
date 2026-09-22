@@ -1,5 +1,8 @@
 # Reviewed CI replay plans
 
+Manual path. The automatic path (`ci-repair-run`, webhook) derives and builds the
+environment itself; see [environment reconstruction](environment.md).
+
 `ci-repair-plan` reads a collected source checkout and the workflow **at that
 commit**, matches the collected job and failed step, and writes a draft JSON
 plan. It does not execute the workflow, install dependencies, start Docker, or
