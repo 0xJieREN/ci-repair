@@ -77,7 +77,7 @@ DEFAULTS = {
     },
     "sandbox": {"setup_network": "ALLOW", "repair_network": "DENY", "secrets": "DENY"},
     "publication": {"draft_pr": "REVIEW", "require_human_review": False, "auto_merge": "DENY"},
-    "repair": {"early_stop": True, "max_rejected_submissions": 2},
+    "repair": {"early_stop": True, "max_rejected_submissions": 2, "max_probes": 10},
 }
 # Capabilities this implementation cannot enforce safely are fixed; relaxing them fails closed.
 FIXED = {
@@ -258,12 +258,33 @@ class Policy:
         self.data: dict = _strict_merge(DEFAULTS, data or {}, "policy")
         self.source = source
         self.digest = hashlib.sha256(raw or repr(sorted(self.data.items())).encode()).hexdigest()
+        self.enforce_budget = True
         self._validate()
+
+    @classmethod
+    def permissive(cls) -> "Policy":
+        """Legacy library callers (evaluation corpora): only paths/modes, no extra limits."""
+        unbounded = {"review": 10**9, "deny": 10**9}
+        policy = cls(
+            {
+                "patch": {
+                    "max_changed_files": unbounded,
+                    "max_changed_lines": unbounded,
+                    "categories": {name: "ALLOW" for name in DEFAULTS["patch"]["categories"]},
+                }
+            },
+            source="builtin-permissive",
+        )
+        policy.enforce_budget = False
+        return policy
 
     def _validate(self):
         d = self.data
         if d["version"] != 1:
             raise PolicyError("Only policy version 1 is supported")
+        for key in ("max_rejected_submissions", "max_probes"):
+            if not isinstance(d["repair"][key], int):
+                raise PolicyError(f"repair.{key} must be an integer")
         for (section, key), fixed in FIXED.items():
             if d[section][key] != fixed:
                 raise PolicyError(f"{section}.{key} can only be {fixed} in this version")
@@ -277,8 +298,6 @@ class Policy:
         for key in ("max_model_calls", "max_wall_seconds", "max_command_seconds"):
             if not float(d["budget"][key]).is_integer():
                 raise PolicyError(f"budget.{key} must be an integer")
-        if not isinstance(d["repair"]["max_rejected_submissions"], int):
-            raise PolicyError("repair.max_rejected_submissions must be an integer")
         self._paths(d["patch"]["allowed_paths"], "patch.allowed_paths")
         if not all(isinstance(m, str) and m for m in d["models"]["allowed"]):
             raise PolicyError("models.allowed must list model name patterns")
@@ -356,7 +375,9 @@ class Policy:
         clamped = []
         for key, limit in maximum.items():
             value = requested.get(key)
-            if value is None:
+            if not self.enforce_budget and value is not None:
+                effective[key] = value
+            elif value is None:
                 effective[key] = limit
             elif value > limit:
                 effective[key] = limit

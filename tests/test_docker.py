@@ -29,7 +29,8 @@ def scripted_model(script):
             "cost_per_call": 0.01,
             "outputs": [
                 make_output("scripted test action", [{"command": command}], cost=0.01)
-                for command in (script, "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT")
+                # A rejected first submission gets feedback; the second ends the attempt.
+                for command in (script, *["echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"] * 2)
             ],
         },
     )
@@ -97,6 +98,18 @@ def test_fresh_verifier(tmp_path, script, expected, marker_expectation):
         report["patch_sha256"]
         == hashlib.sha256((cfg.output / "patch.diff").read_bytes()).hexdigest()
     )
+    if expected == "PASS":
+        # The system stops after the first verified step; the submit output is never needed.
+        assert report["agent_exit"] == "EARLY_STOP_VERIFIED"
+        assert report["usage"]["model_calls"] == 1
+        assert report["verification_source"].startswith("probe")
+    expected_stop = {
+        "PASS": "VERIFIED_PASS",
+        "PATCH_REJECTED": "POLICY_DENIED",
+        "NO_PATCH": "NO_PATCH",
+        "FAIL": "VERIFICATION_FAILED",
+    }
+    assert report["stop_reason"] == expected_stop[expected]
     assert "range(start, end)" in (repo / "src/ranges.py").read_text()
     assert (cfg.output / "trajectory.json").exists()
 

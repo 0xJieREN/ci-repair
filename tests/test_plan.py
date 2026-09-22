@@ -137,9 +137,9 @@ def test_cli_plan_routes_reviewed_inputs_without_executing_setup(tmp_path, monke
     path = reviewed_plan(root, draft(root))
     seen = {}
 
-    def run(config, model):
+    def run(config, model, policy):
         seen["config"] = config
-        return {"status": "PASS", "verified": True}
+        return {"status": "PASS", "verified": True, "stop_reason": "VERIFIED_PASS"}
 
     monkeypatch.setattr(cli, "run", run)
     monkeypatch.setattr(cli, "make_model", lambda *args: object())

@@ -9,6 +9,23 @@ from ci_repair.pipeline import Config, build_context, paths_allowed, run
 from ci_repair.workspace import snapshot
 
 
+class FakeAgent:
+    n_calls, cost, steps_executed, submissions, rejected_submissions = 0, 0, 0, 0, 0
+    command_seconds = 0.0
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def run(self, task):
+        return {"exit_status": "SUBMITTED"}
+
+    def exit_status(self):
+        return "SUBMITTED"
+
+    def models_used(self):
+        return []
+
+
 def config(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -75,7 +92,7 @@ def test_snapshot_rejects_dirty_repo(tmp_path):
         (124, b"patch", "src/a.py\0", 0, "BASELINE_NOT_REPRODUCED", 1),
         (137, b"patch", "src/a.py\0", 0, "BASELINE_NOT_REPRODUCED", 1),
         (1, b"", "src/a.py\0", 0, "NO_PATCH", 2),
-        (1, b"patch", "tests/test.py\0", 0, "PATCH_REJECTED", 3),
+        (1, b"patch", "tests/test.py\0", 0, "PATCH_REJECTED", 2),
         (1, b"patch", "src/a.py\0", 1, "FAIL", 3),
         (1, b"patch", "src/a.py\0", 0, "PASS", 4),
     ],
@@ -110,21 +127,15 @@ def test_orchestration(tmp_path, monkeypatch, baseline, patch, paths, verify, st
         finally:
             closed.append(env)
 
-    class Agent:
+    class Agent(FakeAgent):
         n_calls = 1
         cost = 0.01
-
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def run(self, task):
-            return {"exit_status": "Submitted", "submission": "fixed"}
 
     monkeypatch.setattr(pipeline, "workspace", factory)
     monkeypatch.setattr(pipeline, "snapshot", lambda *args: "abc")
     monkeypatch.setattr(pipeline, "command", lambda *args: b"sha256:image")
     monkeypatch.setattr(pipeline, "extract_patch", lambda *args: patch)
-    monkeypatch.setattr(pipeline, "DefaultAgent", Agent)
+    monkeypatch.setattr(pipeline, "RepairAgent", Agent)
     report = run(cfg, object())
     assert report["status"] == status
     assert report["verified"] == (status == "PASS")
@@ -181,20 +192,13 @@ def test_zero_exit_with_verifier_exception_cannot_pass(tmp_path, monkeypatch):
         phases.append(True)
         yield Env()
 
-    class Agent:
-        n_calls, cost = 0, 0
-
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def run(self, task):
-            return {"exit_status": "Submitted"}
+    Agent = FakeAgent
 
     monkeypatch.setattr(pipeline, "workspace", factory)
     monkeypatch.setattr(pipeline, "snapshot", lambda *args: "abc")
     monkeypatch.setattr(pipeline, "command", lambda *args: b"image")
     monkeypatch.setattr(pipeline, "extract_patch", lambda *args: b"patch")
-    monkeypatch.setattr(pipeline, "DefaultAgent", Agent)
+    monkeypatch.setattr(pipeline, "RepairAgent", Agent)
     report = run(cfg, object())
     assert report["status"] == "FAIL"
     assert report["verified"] is False
@@ -206,3 +210,55 @@ def test_cost_budget_must_be_finite_and_positive(tmp_path, cost):
 
     with pytest.raises(ValueError, match="finite"):
         replace(config(tmp_path), cost=cost).validate()
+
+
+def test_report_records_requested_policy_and_effective_budget(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    from ci_repair.policy import Policy
+
+    cfg = replace(config(tmp_path), steps=99, cost=5.0)
+
+    def expire(*args):
+        raise pipeline.RunDeadline()
+
+    monkeypatch.setattr(pipeline, "snapshot", expire)
+
+    class Model:
+        class config:
+            model_name = "deepseek/x"
+
+    report = run(cfg, Model(), Policy({"budget": {"max_model_calls": 7}}))
+    assert report["budget"]["requested"]["steps"] == 99
+    assert report["budget"]["effective"]["steps"] == 7
+    assert report["budget"]["effective"]["cost"] == 1.0
+    assert set(report["budget"]["clamped"]) == {"steps", "cost"}
+    assert report["config"]["steps"] == 7
+    assert report["stop_reason"] == "WALL_TIME_LIMIT"
+    assert report["usage"]["model_requested"] == "deepseek/x"
+
+
+def test_model_outside_policy_is_denied_before_any_work(tmp_path, monkeypatch):
+    from ci_repair.policy import Policy
+
+    monkeypatch.setattr(pipeline, "snapshot", lambda *args: pytest.fail("no work"))
+
+    class Model:
+        class config:
+            model_name = "openai/gpt"
+
+    report = run(config(tmp_path), Model(), Policy({"models": {"allowed": ["deepseek/*"]}}))
+    assert report["status"] == "POLICY_DENIED"
+    assert report["stop_reason"] == "POLICY_DENIED"
+
+
+def test_context_mismatch_is_stale_source_not_agent_failure(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    cfg = config(tmp_path)
+    manifest = tmp_path / "ci.json"
+    manifest.write_text(json.dumps({"schema_version": 1, "commit": "b" * 40}))
+    monkeypatch.setattr(pipeline, "snapshot", lambda *args: "a" * 40)
+    report = run(replace(cfg, ci_context=manifest), object())
+    assert report["stop_reason"] == "STALE_SOURCE"
+    assert report["error_phase"] == "inputs"

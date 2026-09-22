@@ -54,7 +54,7 @@ def control_model(case: dict, candidate: str):
             "cost_per_call": 0,
             "outputs": [
                 make_output("evaluation control", [{"command": cmd}], cost=0)
-                for cmd in (script, "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT")
+                for cmd in (script, *["echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"] * 2)
             ],
         },
     )

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ci_repair.pipeline import Config, run
+from ci_repair.policy import PolicyError, load_policy
 
 
 def make_model(name: str, model_class: str = "litellm", wall_seconds: int = 600):
@@ -50,7 +51,10 @@ def main():
     parser.add_argument(
         "--env-file", type=Path, help="Explicit local dotenv file (never committed)"
     )
-    parser.add_argument("--model", required=True, help="Upstream adapter model name")
+    parser.add_argument(
+        "--policy", type=Path, help="Operator policy YAML outside the repository (default: builtin)"
+    )
+    parser.add_argument("--model", help="Upstream adapter model name (default: policy default)")
     parser.add_argument(
         "--model-class",
         choices=("litellm", "openrouter"),
@@ -58,10 +62,11 @@ def main():
         help="mini-SWE-agent tool-calling adapter",
     )
     parser.add_argument("--output", type=Path, default=None)
-    parser.add_argument("--steps", type=int, default=30)
-    parser.add_argument("--cost", type=float, default=1.0)
-    parser.add_argument("--wall-seconds", type=int, default=600)
-    parser.add_argument("--command-seconds", type=int, default=60)
+    # Requested budgets; the policy maximum applies when omitted or exceeded.
+    parser.add_argument("--steps", type=int, help="Maximum model calls")
+    parser.add_argument("--cost", type=float, help="Maximum estimated USD")
+    parser.add_argument("--wall-seconds", type=int)
+    parser.add_argument("--command-seconds", type=int)
     args = parser.parse_args()
     if args.plan:
         if any(
@@ -94,15 +99,27 @@ def main():
             allowed_paths=tuple(args.allow or ["src/"]),
             ci_context=args.ci_context,
         )
+    try:
+        policy = load_policy(args.policy, untrusted_roots=[inputs["repo"]])
+    except (PolicyError, OSError) as exc:
+        parser.error(f"Policy: {exc}")
+    model_name = args.model or policy.data["models"]["default"]
+    if not model_name:
+        parser.error("Provide --model or a policy models.default")
+    requested = dict(
+        steps=args.steps,
+        cost=args.cost,
+        wall_seconds=args.wall_seconds,
+        command_seconds=args.command_seconds,
+    )
+    effective = policy.budget(requested)["effective"]
     config = Config(
         **inputs,
         output=(
             args.output or Path("runs") / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         ).resolve(),
-        steps=args.steps,
-        cost=args.cost,
-        wall_seconds=args.wall_seconds,
-        command_seconds=args.command_seconds,
+        # Unset requests become the policy maximum; run() records requested/max/effective.
+        **{k: v if v is not None else effective[k] for k, v in requested.items()},
     )
     try:
         config.validate()
@@ -114,9 +131,9 @@ def main():
         from dotenv import load_dotenv
 
         load_dotenv(args.env_file, override=True)
-    model = make_model(args.model, args.model_class, args.wall_seconds)
-    report = run(config, model)
-    print(f"{report['status']}: {config.output / 'report.json'}")
+    model = make_model(model_name, args.model_class, effective["wall_seconds"])
+    report = run(config, model, policy)
+    print(f"{report['status']} ({report['stop_reason']}): {config.output / 'report.json'}")
     return 0 if report["verified"] else 1
 
 
