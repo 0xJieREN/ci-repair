@@ -9,6 +9,7 @@ from pathlib import Path
 
 from ci_repair.github import CollectionError, api
 from ci_repair.pipeline import paths_allowed
+from ci_repair.policy import Decision, Policy, PolicyError, Verdict, combine, load_policy
 from ci_repair.workspace import checkout_commit, command
 
 
@@ -27,7 +28,7 @@ def verified_run(run_dir: Path) -> tuple[dict, bytes]:
     if (
         report.get("status") != "PASS"
         or report.get("verified") is not True
-        or len(tests) != 2
+        or len(tests) < 2
         or any(t.get("returncode") != 0 or t.get("exception_info") for t in tests)
     ):
         raise PublicationError("Only independently verified PASS runs can be published")
@@ -43,6 +44,88 @@ def verified_run(run_dir: Path) -> tuple[dict, bytes]:
     if not re.fullmatch(r"[0-9a-f]{40}", report["commit"]):
         raise PublicationError("Invalid verified commit")
     return report, patch
+
+
+def publication_gate(report: dict, patch: bytes, policy: Policy) -> Decision:
+    """Deterministic ALLOW / REVIEW / DENY for creating a draft PR from verified evidence.
+
+    Callers have already required verified_run(). DENY blocks every publication; REVIEW
+    allows only an operator-invoked publish; ALLOW permits automatic draft creation.
+    """
+    ci = report.get("github_actions", {})
+    decisions = [
+        policy.check_patch(
+            report.get("changed_files", []), patch, tuple(report["config"]["allowed_paths"])
+        )
+    ]
+    draft = Verdict(policy.data["publication"]["draft_pr"])
+    if draft is not Verdict.ALLOW:
+        decisions.append(Decision(draft, (f"policy publication.draft_pr is {draft.value}",)))
+    if policy.data["publication"]["require_human_review"]:
+        decisions.append(Decision(Verdict.REVIEW, ("policy requires human review",)))
+    trigger = policy.check_trigger(
+        repository=ci.get("repository", ""),
+        event=ci.get("event", ""),
+        branch=ci.get("head_branch"),
+    )
+    if not trigger.allowed:
+        decisions.append(Decision(Verdict.REVIEW, trigger.reasons))
+    if report.get("stop_reason", "VERIFIED_PASS") != "VERIFIED_PASS":
+        decisions.append(Decision(Verdict.REVIEW, (f"stop reason {report.get('stop_reason')}",)))
+    if report.get("kind") != "run":
+        # Manual single-job runs use operator-configured images and commands.
+        decisions.append(Decision(Verdict.REVIEW, ("environment configured manually",)))
+    for job in report.get("jobs", []):
+        name = job.get("job_name", "job")
+        environment = job.get("environment") or {}
+        if environment.get("status") != "SUPPORTED":
+            decisions.append(Decision(Verdict.REVIEW, (f"{name}: environment needs review",)))
+        if environment.get("architecture_mismatch"):
+            decisions.append(Decision(Verdict.REVIEW, (f"{name}: replay architecture differs",)))
+        if job.get("baseline_matches_ci_log") is False:
+            decisions.append(
+                Decision(Verdict.REVIEW, (f"{name}: replayed failure differs from CI log",))
+            )
+    return combine(Decision(Verdict.ALLOW), *decisions)
+
+
+def pr_body(report: dict, gate: Decision) -> str:
+    """Draft PR as the review interface; no logs, commands, paths or credentials."""
+    ci = report["github_actions"]
+    lines = [
+        f"Apply the independently verified patch for [failed CI run {ci['run_id']}]"
+        f"(https://github.com/{ci['repository']}/actions/runs/{ci['run_id']}).",
+        "",
+        f"Verified baseline: `{report['commit']}`; attempt: `{ci['run_attempt']}`.",
+    ]
+    if "job_id" in ci:
+        lines.append(f"Job: `{ci['job_id']}`.")
+    if report.get("jobs"):
+        lines += ["", "| Job | Result | Final verification | Environment |", "|---|---|---|---|"]
+        for job in report["jobs"]:
+            environment = job.get("environment") or {}
+            lines.append(
+                f"| {job['job_name']} | {job['status']} | {job.get('final_verification', '—')} "
+                f"| {environment.get('fidelity', '—')} |"
+            )
+    usage = report.get("usage", {})
+    lines += [
+        "",
+        "The original failing checks and regression checks passed after applying the patch "
+        "in fresh verification environments. Full logs and trajectories remain local.",
+        "",
+        f"Changed files: {', '.join(f'`{p}`' for p in report.get('changed_files', []))}.",
+        f"Publication gate: **{gate.verdict.value}**"
+        + (f" ({'; '.join(gate.reasons)})" if gate.reasons else "")
+        + ".",
+        f"Stop reason: `{report.get('stop_reason', 'VERIFIED_PASS')}`; model calls: "
+        f"{usage.get('model_calls', report.get('model_calls', 0))}; estimated cost: "
+        f"${usage.get('estimated_cost_usd', report.get('estimated_cost_usd', 0)):.4f}.",
+        "",
+        "This is a draft for review; passing these checks is not proof of complete correctness. "
+        "It is never merged automatically.",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def target(report: dict, base: str) -> str:
@@ -80,12 +163,15 @@ def require_base(url: str, base: str, expected: str):
         )
 
 
-def prepare(run_dir: Path, output: Path, base: str) -> dict:
+def prepare(run_dir: Path, output: Path, base: str, policy: Policy | None = None) -> dict:
     if output.exists():
         raise PublicationError(
             "Preparation directory already exists; resume publish or use a new directory"
         )
     report, patch = verified_run(run_dir)
+    gate = publication_gate(report, patch, policy or Policy())
+    if gate.verdict is Verdict.DENY:
+        raise PublicationError(f"Publication denied by policy: {'; '.join(gate.reasons)}")
     url = target(report, base)
     require_base(url, base, report["commit"])
     output.mkdir(parents=True, mode=0o700)
@@ -137,16 +223,7 @@ def prepare(run_dir: Path, output: Path, base: str) -> dict:
     branch = f"ci-repair/{ci['run_id']}-{digest(patch)[:12]}"
     if branch == base:
         raise PublicationError("Repair branch must differ from the target branch")
-    body = (
-        f"Apply the independently verified patch for [failed CI run {ci['run_id']}]"
-        f"(https://github.com/{ci['repository']}/actions/runs/{ci['run_id']}).\n\n"
-        f"Verified baseline: `{report['commit']}`. Job: `{ci['job_id']}`; "
-        f"attempt: `{ci['run_attempt']}`.\n\n"
-        "The original failing command and configured regression command both passed "
-        "after applying the patch in a fresh verification environment. "
-        "Full logs and trajectories remain local.\n\n"
-        "This is a draft for review; passing these checks is not proof of complete correctness.\n"
-    )
+    body = pr_body(report, gate)
     (output / "body.md").write_text(body)
     plan = {
         "schema_version": 1,
@@ -159,16 +236,23 @@ def prepare(run_dir: Path, output: Path, base: str) -> dict:
         "patch_sha256": digest(patch),
         "prepared_diff_sha256": digest(diff),
         "title": title,
+        "gate": gate.to_dict(),
+        "policy": (policy or Policy()).to_dict(),
     }
     (output / "publication.json").write_text(json.dumps(plan, indent=2) + "\n")
     return plan
 
 
-def publish(output: Path) -> str:
+def publish(output: Path, policy: Policy | None = None, *, automatic: bool = False) -> str:
+    """automatic=True publishes only on ALLOW; an operator-invoked publish also accepts REVIEW."""
     plan = json.loads((output / "publication.json").read_text())
     if plan.get("schema_version") != 1:
         raise PublicationError("Unsupported publication plan")
     report, patch = verified_run(Path(plan["run_dir"]))
+    # Re-evaluate with the current policy: a prepared plan never carries old permissions.
+    gate = publication_gate(report, patch, policy or Policy())
+    if gate.verdict is Verdict.DENY or (automatic and gate.verdict is not Verdict.ALLOW):
+        raise PublicationError(f"Publication gate {gate.verdict.value}: {'; '.join(gate.reasons)}")
     if (
         digest(patch) != plan["patch_sha256"]
         or report["commit"] != plan["base_sha"]
@@ -265,9 +349,22 @@ def publish(output: Path) -> str:
             .strip()
         )
     (output / "published.json").write_text(
-        json.dumps({"url": pr_url, "commit": plan["commit"]}) + "\n"
+        json.dumps({"url": pr_url, "commit": plan["commit"], "gate": gate.to_dict()}) + "\n"
     )
     return pr_url
+
+
+def auto(run_dir: Path, output: Path, policy: Policy) -> dict:
+    """prepare -> publication gate -> draft PR, only when every deterministic gate says ALLOW."""
+    report, patch = verified_run(run_dir)
+    gate = publication_gate(report, patch, policy)
+    result = {"gate": gate.to_dict()}
+    if gate.verdict is Verdict.ALLOW:
+        prepare(run_dir, output, report["github_actions"]["head_branch"], policy)
+        result.update(status="PUBLISHED", url=publish(output, policy, automatic=True))
+    else:
+        result["status"] = "REVIEW_REQUIRED" if gate.verdict is Verdict.REVIEW else "DENIED"
+    return result
 
 
 def main():
@@ -281,25 +378,41 @@ def main():
     prep.add_argument("--output", type=Path, required=True)
     pub = sub.add_parser("publish", help="Push the prepared branch and create/resume a draft PR")
     pub.add_argument("output", type=Path)
+    automatic = sub.add_parser(
+        "auto", help="Prepare and publish a draft PR only if the publication gate says ALLOW"
+    )
+    automatic.add_argument("run_dir", type=Path)
+    automatic.add_argument("--output", type=Path, required=True)
+    for command_parser in (prep, pub, automatic):
+        command_parser.add_argument("--policy", type=Path, help="Operator policy YAML")
     args = parser.parse_args()
     try:
+        policy = load_policy(args.policy)
         if args.action == "prepare":
-            plan = prepare(args.run_dir.resolve(), args.output.resolve(), args.base)
+            plan = prepare(args.run_dir.resolve(), args.output.resolve(), args.base, policy)
             print(
-                f"Prepared {plan['commit']} in {args.output}; review patch.diff and body.md before publish"
+                f"Prepared {plan['commit']} in {args.output} (gate {plan['gate']['verdict']}); "
+                "review patch.diff and body.md before publish"
             )
+        elif args.action == "publish":
+            print(publish(args.output.resolve(), policy))
         else:
-            print(publish(args.output.resolve()))
+            result = auto(args.run_dir.resolve(), args.output.resolve(), policy)
+            print(json.dumps(result))
+            return 0 if result["status"] == "PUBLISHED" else 3
     except (
         PublicationError,
         CollectionError,
+        PolicyError,
         subprocess.SubprocessError,
         OSError,
         KeyError,
         ValueError,
     ) as exc:
         msg = (
-            str(exc) if isinstance(exc, (PublicationError, CollectionError)) else type(exc).__name__
+            str(exc)
+            if isinstance(exc, (PublicationError, CollectionError, PolicyError))
+            else type(exc).__name__
         )
         parser.exit(1, f"Publication stopped: {msg}\n")
     return 0

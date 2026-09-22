@@ -257,3 +257,105 @@ def test_real_verifier_report_can_be_prepared_and_published(publication, monkeyp
     assert result["status"] == "PASS", result
     pub.prepare(cfg.output, out, "main")
     assert pub.publish(out) == "https://github.com/owner/repo/pull/1"
+
+
+ALLOW_POLICY = {
+    "repositories": [{"name": "owner/repo", "branches": ["main"]}],
+    "publication": {"draft_pr": "ALLOW"},
+}
+
+
+def as_run_report(run, report, **job_overrides):
+    """Shape of an orchestrated, reconstructed run (ci-repair-run)."""
+    report.update(
+        kind="run",
+        stop_reason="VERIFIED_PASS",
+        jobs=[
+            {
+                "job_id": 12,
+                "job_name": "unit",
+                "status": "REPAIRED",
+                "final_verification": "PASS",
+                "baseline_matches_ci_log": True,
+                "environment": {"status": "SUPPORTED", "fidelity": "toolchain-image"},
+                **job_overrides,
+            }
+        ],
+    )
+    report["github_actions"]["event"] = "push"
+    (run / "report.json").write_text(json.dumps(report))
+
+
+def pushes(calls):
+    return [c for c in calls if c[:2] == ["git", "push"]]
+
+
+def test_auto_publishes_draft_only_when_every_gate_allows(publication):
+    from ci_repair.policy import Policy
+
+    run, out, remote, repo, report, calls, prs = publication
+    as_run_report(run, report)
+    result = pub.auto(run, out, Policy(ALLOW_POLICY))
+    assert result["status"] == "PUBLISHED", result
+    assert result["gate"]["verdict"] == "ALLOW"
+    create = next(c for c in calls if c[:3] == ["gh", "pr", "create"])
+    assert "--draft" in create
+    body = (out / "body.md").read_text()
+    assert "Publication gate: **ALLOW**" in body and "| unit | REPAIRED | PASS |" in body
+    assert not any("merge" in c for c in calls if c[:2] == ["gh", "pr"])
+
+
+MISMATCH = {"status": "SUPPORTED", "architecture_mismatch": {"runner": "x64", "replay": "arm64"}}
+
+
+@pytest.mark.parametrize(
+    "policy_overrides,job_overrides,changed,reason",
+    [
+        ({}, {"environment": {"status": "REVIEW_REQUIRED"}}, None, "environment needs review"),
+        ({}, {"baseline_matches_ci_log": False}, None, "differs from CI log"),
+        ({}, {"environment": MISMATCH}, None, "architecture"),
+        ({"publication": {"draft_pr": "REVIEW"}}, {}, None, "draft_pr is REVIEW"),
+        ({"publication": {"draft_pr": "ALLOW", "require_human_review": True}}, {}, None, "human"),
+        ({"repositories": []}, {}, None, "not in the policy"),
+        ({}, {}, "tests/test_code.py", "tests"),
+    ],
+)
+def test_auto_stops_at_review_without_remote_writes(
+    publication, policy_overrides, job_overrides, changed, reason
+):
+    from ci_repair.policy import Policy
+
+    run, out, remote, repo, report, calls, prs = publication
+    if changed:
+        report.update(changed_files=[changed], config={"allowed_paths": ["."]})
+    as_run_report(run, report, **job_overrides)
+    result = pub.auto(run, out, Policy({**ALLOW_POLICY, **policy_overrides}))
+    assert result["status"] == "REVIEW_REQUIRED"
+    assert any(reason in r for r in result["gate"]["reasons"]), result
+    assert not pushes(calls) and not prs and not out.exists()
+
+
+def test_manual_single_job_run_is_review_but_operator_publish_still_works(publication):
+    from ci_repair.policy import Policy
+
+    run, out, remote, repo, report, calls, prs = publication
+    assert pub.auto(run, out, Policy(ALLOW_POLICY))["status"] == "REVIEW_REQUIRED"
+    plan = pub.prepare(run, out, "main", Policy(ALLOW_POLICY))
+    assert plan["gate"]["verdict"] == "REVIEW"
+    assert "environment configured manually" in plan["gate"]["reasons"]
+    with pytest.raises(pub.PublicationError, match="REVIEW"):
+        pub.publish(out, Policy(ALLOW_POLICY), automatic=True)
+    assert pub.publish(out, Policy(ALLOW_POLICY)) == "https://github.com/owner/repo/pull/1"
+
+
+def test_deny_blocks_prepare_and_policy_is_reevaluated_at_publish(publication):
+    from ci_repair.policy import Policy
+
+    run, out, remote, repo, report, calls, prs = publication
+    deny = Policy({"publication": {"draft_pr": "DENY"}})
+    with pytest.raises(pub.PublicationError, match="denied"):
+        pub.prepare(run, out, "main", deny)
+    pub.prepare(run, out, "main")
+    with pytest.raises(pub.PublicationError, match="DENY"):
+        pub.publish(out, deny)
+    assert not pushes(calls)
