@@ -18,7 +18,7 @@ pytestmark = [
 ]
 
 
-def scripted_model(script):
+def scripted_model(*scripts):
     from minisweagent.models import get_model
     from minisweagent.models.test_models import make_output
 
@@ -30,23 +30,13 @@ def scripted_model(script):
             "outputs": [
                 make_output("scripted test action", [{"command": command}], cost=0.01)
                 # A rejected first submission gets feedback; the second ends the attempt.
-                for command in (script, *["echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"] * 2)
+                for command in (*scripts, *["echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"] * 2)
             ],
         },
     )
 
 
-@pytest.mark.parametrize(
-    "script,expected,marker_expectation",
-    [
-        ("sed -i 's/range(start, end)/range(start, end + 1)/' src/ranges.py", "PASS", None),
-        ("sed -i 's/, 14)/, 9)/' tests/test_ranges.py", "PATCH_REJECTED", None),
-        ("true", "NO_PATCH", None),
-        ("sed -i 's/range(start, end)/range(start, end + 1)/' src/ranges.py", "PASS", "! -e"),
-        ("sed -i 's/range(start, end)/range(start, end + 1)/' src/ranges.py", "FAIL", "-e"),
-    ],
-)
-def test_fresh_verifier(tmp_path, script, expected, marker_expectation):
+def fixture_repo(tmp_path):
     repo = tmp_path / "target"
     shutil.copytree(
         Path(__file__).parents[1] / "examples/buggy",
@@ -72,6 +62,21 @@ def test_fresh_verifier(tmp_path, script, expected, marker_expectation):
         check=True,
         capture_output=True,
     )
+    return repo
+
+
+@pytest.mark.parametrize(
+    "script,expected,marker_expectation",
+    [
+        ("sed -i 's/range(start, end)/range(start, end + 1)/' src/ranges.py", "PASS", None),
+        ("sed -i 's/, 14)/, 9)/' tests/test_ranges.py", "PATCH_REJECTED", None),
+        ("true", "NO_PATCH", None),
+        ("sed -i 's/range(start, end)/range(start, end + 1)/' src/ranges.py", "PASS", "! -e"),
+        ("sed -i 's/range(start, end)/range(start, end + 1)/' src/ranges.py", "FAIL", "-e"),
+    ],
+)
+def test_fresh_verifier(tmp_path, script, expected, marker_expectation):
+    repo = fixture_repo(tmp_path)
     log = tmp_path / "failure.log"
     log.write_text("AssertionError: 9 != 14")
     cfg = Config(
@@ -112,6 +117,30 @@ def test_fresh_verifier(tmp_path, script, expected, marker_expectation):
     assert report["stop_reason"] == expected_stop[expected]
     assert "range(start, end)" in (repo / "src/ranges.py").read_text()
     assert (cfg.output / "trajectory.json").exists()
+
+
+def test_probes_leave_the_agents_git_view_unchanged(tmp_path):
+    repo = fixture_repo(tmp_path)
+    log = tmp_path / "failure.log"
+    log.write_text("AssertionError: 9 != 14")
+    cfg = Config(
+        repo,
+        log,
+        tmp_path / "run",
+        "ci-repair-demo:local",
+        "python -m unittest discover -s tests -k test_positive_interval",
+        "python -m unittest discover -s tests",
+    )
+    model = scripted_model(
+        "printf '# touched\\n' >> src/ranges.py",  # still failing: probe runs and fails
+        # Only fixes the bug if the earlier edit is still visible as an unstaged change.
+        "git diff --name-only | grep -qx src/ranges.py && "
+        "sed -i 's/range(start, end)/range(start, end + 1)/' src/ranges.py",
+    )
+    report = run(cfg, model)
+    assert report["status"] == "PASS", report
+    assert report["usage"]["verification_probes"] == 2
+    assert report["agent_exit"] == "EARLY_STOP_VERIFIED"
 
 
 def test_command_timeout_terminates_container_process(tmp_path):

@@ -123,7 +123,7 @@ def gate_fixture(tmp_path, monkeypatch, patches, verdicts, policy=None):
     cfg.output.mkdir()
     patches = list(patches)
     verified = []
-    monkeypatch.setattr(pipeline, "extract_patch", lambda env: patches.pop(0))
+    monkeypatch.setattr(pipeline, "extract_patch", lambda *a, **k: patches.pop(0))
 
     def verify(config, archive, image, patch_path):
         verified.append(patch_path.read_bytes())

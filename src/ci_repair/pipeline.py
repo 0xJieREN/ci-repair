@@ -13,7 +13,7 @@ from ci_repair.agent import AgentExit, GateResult, RepairAgent, StopReason, fina
 from ci_repair.context import failure_evidence
 from ci_repair.github import CollectionError, load_context
 from ci_repair.policy import Policy, Verdict, safe_prefix, within
-from ci_repair.workspace import command, extract_patch, snapshot, workspace
+from ci_repair.workspace import PROBE_INDEX, command, extract_patch, snapshot, workspace
 
 SYSTEM_TEMPLATE = (
     "Repair the failing repository in /workspace. Use the bash tool to inspect, "
@@ -131,12 +131,15 @@ def verify_patch(config: Config, archive: Path, image: str, patch_path: Path) ->
     return report
 
 
-def patch_files(env) -> list[str]:
-    names = env.checked("git diff --cached --name-only -z HEAD").rstrip("\0")
+def patch_files(env, base: str = "HEAD", *, probe: bool = False) -> list[str]:
+    index = f"GIT_INDEX_FILE={PROBE_INDEX} " if probe else ""
+    names = env.checked(f"{index}git diff --cached --name-only -z {base}").rstrip("\0")
     return names.split("\0") if names else []
 
 
-def make_gate(config: Config, policy: Policy, archive: Path, image: str, env, state: dict):
+def make_gate(
+    config: Config, policy: Policy, archive: Path, image: str, env, state: dict, base="HEAD"
+):
     """Deterministic gate for agent submissions and verifier-triggered early stop.
 
     Verification runs in fresh containers from the original snapshot, never in the agent's
@@ -145,12 +148,13 @@ def make_gate(config: Config, policy: Policy, archive: Path, image: str, env, st
     repair = policy.data["repair"]
 
     def gate(kind: str) -> GateResult:
-        patch = extract_patch(env)
+        patch = extract_patch(env, base, probe=True)
         if not patch:
             return GateResult(kind == "submit", exit=AgentExit.SUBMITTED_NO_PATCH)
         key = hashlib.sha256(patch).hexdigest()
         if key not in state["gates"]:
-            decision = policy.check_patch(patch_files(env), patch, config.allowed_paths)
+            paths = patch_files(env, base, probe=True)
+            decision = policy.check_patch(paths, patch, config.allowed_paths)
             if decision.verdict is Verdict.DENY:
                 state["gates"][key] = {"policy": decision.to_dict(), "status": "PATCH_REJECTED"}
             elif kind == "probe" and state["probes"] >= repair["max_probes"]:
@@ -252,10 +256,12 @@ def run(config: Config, model, policy: Policy | None = None) -> dict:
             return report
         phase = "agent"
         with workspace(archive, image, config.command_seconds, config.wall_seconds) as env:
+            # Diff against the recorded baseline so an agent commit cannot hide changes.
+            base = env.checked("git rev-parse HEAD").strip() or "HEAD"
             agent = RepairAgent(
                 model,
                 env,
-                gate=make_gate(config, policy, archive, image, env, state),
+                gate=make_gate(config, policy, archive, image, env, state, base),
                 early_stop=policy.data["repair"]["early_stop"],
                 max_rejected_submissions=policy.data["repair"]["max_rejected_submissions"],
                 system_template=SYSTEM_TEMPLATE,
@@ -267,10 +273,10 @@ def run(config: Config, model, policy: Policy | None = None) -> dict:
             )
             report["agent_result"] = agent.run(context)
             report["agent_exit"] = agent.exit_status()
-            patch = extract_patch(env)
+            patch = extract_patch(env, base)
             (config.output / "patch.diff").write_bytes(patch)
             report["patch_sha256"] = hashlib.sha256(patch).hexdigest()
-            paths = patch_files(env) if patch else []
+            paths = patch_files(env, base) if patch else []
         if not patch:
             report["status"] = "NO_PATCH"
             return report

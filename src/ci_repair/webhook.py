@@ -201,7 +201,7 @@ def default_repair(item: dict, directory: Path, policy: Policy) -> dict:
     """collect -> orchestrate -> publication gate -> draft PR (only on ALLOW)."""
     from ci_repair.cli import make_model
     from ci_repair.orchestrate import repair_run
-    from ci_repair.publish import auto
+    from ci_repair.publish import PublicationError, auto
 
     github.collect_run(
         item["repository"], item["run_id"], directory / "collection", attempt=item["attempt"]
@@ -218,7 +218,10 @@ def default_repair(item: dict, directory: Path, policy: Policy) -> dict:
     )
     result = {"repair_status": report["status"], "stop_reason": report.get("stop_reason")}
     if report.get("verified"):
-        result["publication"] = auto(directory / "repair", directory / "publication", policy)
+        try:
+            result["publication"] = auto(directory / "repair", directory / "publication", policy)
+        except PublicationError as exc:  # our own messages, e.g. merge-checkout provenance
+            result["publication"] = {"status": "NOT_PUBLISHABLE", "reason": str(exc)}
     return result
 
 

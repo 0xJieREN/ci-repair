@@ -156,12 +156,26 @@ def workspace(archive: Path, image: str, timeout: int, lifetime: int):
         env.cleanup()
 
 
-def extract_patch(env: Sandbox) -> bytes:
-    env.checked("git add -A")
+PROBE_INDEX = "/tmp/ci-repair-probe.index"
+
+
+def extract_patch(env: Sandbox, base: str = "HEAD", *, probe: bool = False) -> bytes:
+    """Binary diff of the workspace (including untracked files) against the baseline commit.
+
+    probe=True stages into a throwaway index so the agent's own `git diff`/`git status`
+    view is unchanged while a session is still running.
+    """
+    exec_env = []
+    if probe:
+        env.checked(f"cp .git/index {PROBE_INDEX} && GIT_INDEX_FILE={PROBE_INDEX} git add -A")
+        exec_env = ["-e", f"GIT_INDEX_FILE={PROBE_INDEX}"]
+    else:
+        env.checked("git add -A")
     return command(
         [
             "docker",
             "exec",
+            *exec_env,
             "-w",
             "/workspace",
             env.container_id,
@@ -169,7 +183,7 @@ def extract_patch(env: Sandbox) -> bytes:
             "diff",
             "--cached",
             "--binary",
-            "HEAD",
+            base,
             "--",
         ]
     )
