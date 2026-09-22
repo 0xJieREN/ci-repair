@@ -62,3 +62,26 @@ def failure_evidence(log: str) -> dict:
         "raw_excerpt": raw,
         "raw_truncated": len(log) > 6000,
     }
+
+
+TIMESTAMP = re.compile(r"^\ufeff?\d{4}-\d\d-\d\dT[\d:.]+Z ")
+WORKDIR = re.compile(r"/home/runner/work/[^/\s]+/[^/\s]+/|/__w/[^/\s]+/[^/\s]+/|/workspace/")
+
+
+def error_signature(text: str) -> set[str]:
+    """Normalized error lines, independent of runner paths, timestamps and colors."""
+    signature = set()
+    for line in text.splitlines():
+        line = WORKDIR.sub("", TIMESTAMP.sub("", ANSI.sub("", line))).strip()
+        if ERROR.search(line):
+            signature.add(" ".join(line.split())[:200])
+    return signature
+
+
+def evidence_overlap(ci_log: str, replay_output: str) -> bool | None:
+    """Does the replayed baseline show at least one error line the CI log showed?
+
+    None means the CI log had no recognizable error line to compare.
+    """
+    expected = error_signature(ci_log)
+    return bool(expected & error_signature(replay_output)) if expected else None

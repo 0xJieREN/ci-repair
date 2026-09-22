@@ -77,7 +77,12 @@ DEFAULTS = {
     },
     "sandbox": {"setup_network": "ALLOW", "repair_network": "DENY", "secrets": "DENY"},
     "publication": {"draft_pr": "REVIEW", "require_human_review": False, "auto_merge": "DENY"},
-    "repair": {"early_stop": True, "max_rejected_submissions": 2, "max_probes": 10},
+    "repair": {
+        "early_stop": True,
+        "max_rejected_submissions": 2,
+        "max_probes": 10,
+        "max_jobs": 5,
+    },
 }
 # Capabilities this implementation cannot enforce safely are fixed; relaxing them fails closed.
 FIXED = {
@@ -282,7 +287,7 @@ class Policy:
         d = self.data
         if d["version"] != 1:
             raise PolicyError("Only policy version 1 is supported")
-        for key in ("max_rejected_submissions", "max_probes"):
+        for key in ("max_rejected_submissions", "max_probes", "max_jobs"):
             if not isinstance(d["repair"][key], int):
                 raise PolicyError(f"repair.{key} must be an integer")
         for (section, key), fixed in FIXED.items():

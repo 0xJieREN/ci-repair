@@ -27,3 +27,15 @@ def test_repeated_diagnostics_are_deduplicated_and_bounded():
     assert len(evidence["raw_excerpt"]) < 6100
     assert len(evidence["error_blocks"]) <= 8
     assert any(b["truncated"] for b in evidence["error_blocks"])
+
+
+def test_baseline_evidence_overlap_ignores_runner_paths_and_timestamps():
+    from ci_repair.context import evidence_overlap
+
+    ci = (
+        '2026-09-18T04:28:19.1Z   File "/home/runner/work/r/r/src/a.py", line 3\n'
+        "2026-09-18T04:28:19.1Z AssertionError: expected 14, got 9\n"
+    )
+    assert evidence_overlap(ci, "AssertionError: expected 14, got 9\n") is True
+    assert evidence_overlap(ci, "ModuleNotFoundError: No module named 'x'\n") is False
+    assert evidence_overlap("all good\n", "anything") is None
