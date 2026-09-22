@@ -281,3 +281,86 @@ def test_explicit_attempt_avoids_loading_latest_metadata(tmp_path, monkeypatch):
     collect("owner/repo", 7, tmp_path / "out", attempt=1)
     assert calls[0] == "repos/owner/repo/actions/runs/7/attempts/1"
     assert "repos/owner/repo/actions/runs/7" not in calls
+
+
+def run_api(monkeypatch, jobs, logs, run=None):
+    calls = []
+
+    def api(endpoint):
+        calls.append(endpoint)
+        if endpoint.endswith("/logs"):
+            return logs[int(endpoint.split("/")[-2])]
+        if "/jobs?" in endpoint:
+            return json.dumps({"jobs": jobs}).encode()
+        if "/commits/" in endpoint:
+            return json.dumps({"parents": [{"sha": "b" * 40}, {"sha": SHA}]}).encode()
+        return json.dumps(run or run_data(path=".github/workflows/ci.yml")).encode()
+
+    monkeypatch.setattr(github, "api", api)
+    return calls
+
+
+def test_collect_run_gathers_every_failed_job_with_step_conclusions(tmp_path, monkeypatch):
+    jobs = [
+        {**job(13), "name": "lint", "labels": ["ubuntu-latest"]},
+        {**job(12), "steps": [{"number": 1, "name": "unit", "conclusion": "failure"}]},
+        {**job(14), "conclusion": "success"},
+        {**job(15), "conclusion": "cancelled", "name": "slow"},
+    ]
+    run_api(monkeypatch, jobs, {12: LOG, 13: b"E lint\n"})
+    fake_git(monkeypatch)
+    output = tmp_path / "run"
+    manifest = github.collect_run("owner/repo", 7, output)
+    assert [j["job_id"] for j in manifest["jobs"]] == [12, 13]
+    assert manifest["other_unsuccessful_jobs"] == [
+        {"job_id": 15, "job_name": "slow", "conclusion": "cancelled"}
+    ]
+    context = load_context(output / "jobs/12/ci-context.json", SHA, LOG)
+    assert context["job_id"] == 12
+    raw = json.loads((output / "jobs/12/ci-context.json").read_text())
+    assert raw["job_steps"] == [{"number": 1, "name": "unit", "conclusion": "failure"}]
+    assert json.loads((output / "jobs/13/ci-context.json").read_text())["job_labels"] == [
+        "ubuntu-latest"
+    ]
+    assert json.loads((output / "run.json").read_text())["commit"] == SHA
+
+
+def test_real_checkout_log_yields_sha():
+    from pathlib import Path
+
+    log = b"2026-09-18T04:28:18.7Z [command]/usr/bin/git log -1 --format=%H\r\n"
+    log += b"2026-09-18T04:28:18.7Z " + SHA.encode() + b"\r\n"
+    assert github.checkout_sha_from_log(log) == SHA
+    assert github.checkout_sha_from_log(b"no checkout here") is None
+    real = Path(__file__).parents[1] / "runs/github-import-01/failure.log"
+    if real.exists():
+        assert github.checkout_sha_from_log(real.read_bytes()) == (
+            "931e711c8bb7462b89791e0b77c8db996f1e2ee1"
+        )
+
+
+def test_collect_run_pr_derives_and_verifies_checkout_sha(tmp_path, monkeypatch):
+    merge = "c" * 40
+    checkout = (
+        b"2026-09-18T04:28:18.7Z [command]/usr/bin/git log -1 --format=%H\n2026-09-18T04:28:18.7Z "
+        + merge.encode()
+        + b"\n"
+    )
+    run_api(monkeypatch, [job(12), job(13)], {12: checkout, 13: checkout}, run=pr_run())
+
+    def command(args, **kwargs):
+        return merge.encode() if args[:3] == ["git", "rev-parse", "HEAD"] else b""
+
+    monkeypatch.setattr(github, "command", command)
+    monkeypatch.setattr(github, "checkout_commit", lambda repo, sha: None)
+    manifest = github.collect_run("owner/repo", 7, tmp_path / "run")
+    assert manifest["commit"] == merge
+    assert manifest["checkout_kind"] == "merge"
+    other = (
+        b"2026-09-18T04:28:18.7Z [command]/usr/bin/git log -1 --format=%H\n2026-09-18T04:28:18.7Z "
+        + b"d" * 40
+        + b"\n"
+    )
+    run_api(monkeypatch, [job(12), job(13)], {12: checkout, 13: other}, run=pr_run())
+    with pytest.raises(CollectionError, match="agree"):
+        github.collect_run("owner/repo", 7, tmp_path / "run2")

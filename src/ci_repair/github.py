@@ -86,27 +86,20 @@ def resolve_source(repository: str, run: dict, checkout_sha: str | None) -> tupl
     }
 
 
-def collect(
-    repository: str,
-    run_id: int,
-    output: Path,
-    *,
-    job_id: int | None = None,
-    attempt: int | None = None,
-    checkout_sha: str | None = None,
-) -> dict:
+def fetch_run(repository: str, run_id: int, attempt: int | None) -> tuple[dict, int]:
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise CollectionError("Repository must be owner/name on github.com")
     if run_id <= 0 or (attempt is not None and attempt <= 0):
         raise CollectionError("Run and attempt numbers must be positive")
-    if output.exists():
-        raise CollectionError("Output already exists; choose a new directory")
     base = f"repos/{repository}/actions/runs/{run_id}"
     run = json.loads(api(base if attempt is None else f"{base}/attempts/{attempt}"))
-    attempt = attempt or run["run_attempt"]
     if run["status"] != "completed" or run["conclusion"] != "failure":
         raise CollectionError("Only completed failed runs are supported")
-    sha, source = resolve_source(repository, run, checkout_sha)
+    return run, attempt or run["run_attempt"]
+
+
+def list_jobs(repository: str, run_id: int, attempt: int) -> list[dict]:
+    base = f"repos/{repository}/actions/runs/{run_id}"
     jobs = []
     page = 1
     while True:
@@ -115,13 +108,20 @@ def collect(
         if len(batch) < 100:
             break
         page += 1
-    job = select_job(jobs, job_id)
+    return jobs
+
+
+def job_log(repository: str, run: dict, run_id: int, job: dict) -> bytes:
     if job["run_id"] != run_id or job["head_sha"] != run["head_sha"]:
         raise CollectionError("Job does not match the selected run commit")
     log = api(f"repos/{repository}/actions/jobs/{job['id']}/logs")
     if not log.strip():
         raise CollectionError("Failed job log is empty or unavailable")
-    metadata = {
+    return log
+
+
+def job_metadata(repository, run, run_id, attempt, sha, source, job, log) -> dict:
+    return {
         "schema_version": 1,
         **source,
         "repository": repository,
@@ -137,12 +137,16 @@ def collect(
         "failed_steps": [
             s["name"] for s in job.get("steps", []) if s.get("conclusion") == "failure"
         ],
+        # Step conclusions and runner labels let reconstruction decide which steps ran.
+        "job_steps": [
+            {k: s.get(k) for k in ("number", "name", "conclusion")} for s in job.get("steps", [])
+        ],
+        "job_labels": job.get("labels", []),
         "log_sha256": hashlib.sha256(log).hexdigest(),
     }
-    output.mkdir(parents=True, mode=0o700)
-    # A failed collection remains inspectable but never gets a completion manifest.
-    (output / "failure.log").write_bytes(log)
-    checkout = output / "repo"
+
+
+def clone_at(repository: str, checkout: Path, sha: str):
     command(
         [
             "gh",
@@ -160,8 +164,101 @@ def collect(
     actual = command(["git", "rev-parse", "HEAD"], cwd=checkout).decode().strip()
     if actual != sha:
         raise CollectionError("Checkout does not match the failing commit")
+
+
+def checkout_sha_from_log(log: bytes) -> str | None:
+    """actions/checkout prints `git log -1 --format=%H` output; verified later via the API."""
+    text = log.decode(errors="replace")
+    found = set(
+        re.findall(
+            r"git log -1 --format=['\"]?%H['\"]?\s*\n(?:\S+Z )?['\"]?([0-9a-f]{40})['\"]?\s*$",
+            text,
+            re.MULTILINE,
+        )
+    )
+    return found.pop() if len(found) == 1 else None
+
+
+def collect(
+    repository: str,
+    run_id: int,
+    output: Path,
+    *,
+    job_id: int | None = None,
+    attempt: int | None = None,
+    checkout_sha: str | None = None,
+) -> dict:
+    if output.exists():
+        raise CollectionError("Output already exists; choose a new directory")
+    run, attempt = fetch_run(repository, run_id, attempt)
+    sha, source = resolve_source(repository, run, checkout_sha)
+    job = select_job(list_jobs(repository, run_id, attempt), job_id)
+    log = job_log(repository, run, run_id, job)
+    metadata = job_metadata(repository, run, run_id, attempt, sha, source, job, log)
+    output.mkdir(parents=True, mode=0o700)
+    # A failed collection remains inspectable but never gets a completion manifest.
+    (output / "failure.log").write_bytes(log)
+    clone_at(repository, output / "repo", sha)
     (output / "ci-context.json").write_text(json.dumps(metadata, indent=2) + "\n")
     return metadata
+
+
+def collect_run(
+    repository: str,
+    run_id: int,
+    output: Path,
+    *,
+    attempt: int | None = None,
+    checkout_sha: str | None = None,
+) -> dict:
+    """Collect every failed job of one run attempt, sharing one pinned checkout."""
+    if output.exists():
+        raise CollectionError("Output already exists; choose a new directory")
+    run, attempt = fetch_run(repository, run_id, attempt)
+    jobs = list_jobs(repository, run_id, attempt)
+    failed = sorted(
+        (j for j in jobs if j["status"] == "completed" and j["conclusion"] == "failure"),
+        key=lambda j: j["id"],
+    )
+    if not failed:
+        raise CollectionError("Run attempt has no failed jobs")
+    logs = {job["id"]: job_log(repository, run, run_id, job) for job in failed}
+    if checkout_sha is None and run["event"] == "pull_request":
+        derived = {checkout_sha_from_log(log) for log in logs.values()}
+        if len(derived) != 1 or None in derived:
+            raise CollectionError("Failed jobs do not agree on one recorded checkout SHA")
+        checkout_sha = derived.pop()
+    sha, source = resolve_source(repository, run, checkout_sha)
+    output.mkdir(parents=True, mode=0o700)
+    entries = []
+    for job in failed:
+        directory = output / "jobs" / str(job["id"])
+        directory.mkdir(parents=True)
+        (directory / "failure.log").write_bytes(logs[job["id"]])
+        metadata = job_metadata(repository, run, run_id, attempt, sha, source, job, logs[job["id"]])
+        (directory / "ci-context.json").write_text(json.dumps(metadata, indent=2) + "\n")
+        entries.append({"job_id": job["id"], "job_name": job["name"], "path": f"jobs/{job['id']}"})
+    clone_at(repository, output / "repo", sha)
+    manifest = {
+        "schema_version": 1,
+        **source,
+        "repository": repository,
+        "commit": sha,
+        "run_id": run_id,
+        "run_attempt": attempt,
+        "run_url": run["html_url"],
+        "event": run["event"],
+        "workflow": run["name"],
+        "workflow_path": run.get("path"),
+        "jobs": entries,
+        "other_unsuccessful_jobs": [
+            {"job_id": j["id"], "job_name": j["name"], "conclusion": j["conclusion"]}
+            for j in jobs
+            if j["conclusion"] not in ("success", "failure", "skipped", None)
+        ],
+    }
+    (output / "run.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    return manifest
 
 
 def load_context(path: Path, sha: str, log: bytes) -> dict:
@@ -186,7 +283,7 @@ def load_context(path: Path, sha: str, log: bytes) -> dict:
         "failed_steps",
     )
     result = {field: metadata[field] for field in fields}
-    for field in ("checkout_kind", "head_branch", "pull_request"):
+    for field in ("checkout_kind", "head_branch", "pull_request", "workflow_path"):
         if field in metadata:
             result[field] = metadata[field]
     return result
@@ -198,11 +295,30 @@ def main():
     parser.add_argument("run_id", type=int)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--job-id", type=int)
+    parser.add_argument(
+        "--all-jobs", action="store_true", help="Collect every failed job for ci-repair-run"
+    )
     parser.add_argument("--attempt", type=int, help="Default: latest attempt at collection start")
     parser.add_argument(
         "--checkout-sha", help="Exact SHA checked out by the PR job; required for PR events"
     )
     args = parser.parse_args()
+    if args.all_jobs:
+        if args.job_id:
+            parser.error("--all-jobs cannot be combined with --job-id")
+        try:
+            manifest = collect_run(
+                args.repository,
+                args.run_id,
+                args.output.resolve(),
+                attempt=args.attempt,
+                checkout_sha=args.checkout_sha,
+            )
+        except (CollectionError, subprocess.SubprocessError, OSError) as exc:
+            message = str(exc) if isinstance(exc, CollectionError) else type(exc).__name__
+            parser.exit(1, f"Collection failed: {message}\n")
+        print(f"Collected {len(manifest['jobs'])} failed jobs into {args.output}")
+        return 0
     try:
         result = collect(
             args.repository,
