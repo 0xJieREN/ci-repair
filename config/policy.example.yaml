@@ -1,0 +1,41 @@
+# Operator policy for ci-repair. Keep this file outside every repository under repair;
+# a failing branch must never be able to edit the rules that govern its own repair.
+version: 1
+repositories:
+  - name: 0xJieREN/ci-repair
+    branches: [main, "feature/*"]
+    allowed_paths: [examples/buggy/src/]
+triggers:
+  events: [push, workflow_dispatch, pull_request]  # pull_request_target and forks: always DENY
+models:
+  allowed: ["deepseek/*"]
+  default: deepseek/deepseek-flash
+budget:
+  max_model_calls: 30
+  max_cost_usd: 1.0
+  max_wall_seconds: 600
+  max_command_seconds: 120
+  max_setup_seconds: 900
+patch:
+  allowed_paths: ["."]
+  max_changed_files: {review: 5, deny: 20}
+  max_changed_lines: {review: 200, deny: 1000}
+  categories:
+    workflows: DENY
+    lockfiles: REVIEW
+    dependency_manifests: REVIEW
+    tests: REVIEW
+    generated: DENY
+    config: REVIEW
+    binary: REVIEW
+sandbox:
+  setup_network: ALLOW   # dependency installation while building the replay image
+  repair_network: DENY   # fixed
+  secrets: DENY          # fixed
+publication:
+  draft_pr: ALLOW        # ALLOW: publish automatically when every gate passes
+  require_human_review: false
+  auto_merge: DENY       # fixed
+repair:
+  early_stop: true
+  max_rejected_submissions: 2
