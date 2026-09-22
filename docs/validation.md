@@ -173,3 +173,14 @@ repair PR integration remain outside v0.1. Run artifacts and secrets stay local.
   above exercise the new integration separately.
 - Scope is selected-check local replay, without a hidden oracle or full-workflow
   score. Colima stopped after each Docker batch.
+
+## External LCA model pilot (2026-09-22)
+
+- Completed two LCA samples times two runners with **41/60 authorized calls**,
+  estimated USD **0.009040776**. Both runners achieved **2/2 selected-check PASS**.
+- All patches matched dataset reference diffs. CI Repair explicitly submitted
+  both tasks; upstream submitted one and reached its step limit on the other.
+- No hidden oracle/full-workflow score/false-PASS rate is claimed. Source,
+  model-config and patch evidence matched; Colima independently verified stopped.
+- Implementation GitHub CI passed **123 tests**. See [report and evidence](
+  experiments/2026-09-22-lca-deepseek.md).

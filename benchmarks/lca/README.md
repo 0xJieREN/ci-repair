@@ -41,3 +41,7 @@ CI log. Python 3.10.21/Linux ARM64 is our local environment, not a recreation of
 every original OS/Python matrix combination. Dockerfile base/tool images are
 pinned by digest; the final image ID is recorded in each experiment. Apt package
 repositories are not an immutable snapshot, so rebuilds may produce a new ID.
+
+The [first measured pilot](../../docs/experiments/2026-09-22-lca-deepseek.md)
+completed four trials using 41 of 60 authorized model calls. Keep its
+selected-check results separate from official benchmark scores.
