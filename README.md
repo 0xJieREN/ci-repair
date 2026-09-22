@@ -123,3 +123,7 @@ reference-fix/no-op controls and the original upstream regression suites.
 the pinned workflow. Fill in the prepared image, regression command and allowed
 paths, then use `ci-repair --plan PLAN.json --model ...`. See the
 [plan contract and supported workflow subset](docs/replay-plan.md).
+
+The first external CI dataset integration uses [LCA local check replay](benchmarks/lca/README.md),
+with pinned archived logs and reviewed lint/type-check recipes. See the
+[benchmark comparison](docs/benchmark-selection-2026-09-22.md) for selection and scoring limits.

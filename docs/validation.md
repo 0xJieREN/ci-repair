@@ -157,3 +157,19 @@ repair PR integration remain outside v0.1. Run artifacts and secrets stay local.
 - Source archives, model configurations and patch hashes were checked; no
   configured credential values were found in artifacts. Colima is `Stopped`.
 - [Full results and caveats](experiments/2026-09-19-historical-deepseek.md).
+
+## External LCA dataset admission (2026-09-22)
+
+- Audited public CI datasets and selected LCA default/test revision
+  `ebf12dad7a97c3c0cdc38705403d8bc8ddde47dc` (68 cases). Imported IDs 24 and 107
+  with full original repositories, archived logs, and reference-diff tree checks.
+- Both expected failures reproduce; 4 reference controls pass and 4 no-op
+  controls are rejected across the two runners. No external model calls in
+  admission. [Evidence](experiments/2026-09-22-lca-controls.json).
+- First admission attempt found a missing tool PATH, failed closed, and spent
+  no model calls. Corrected the explicit HTTPX command environment and reran.
+- Unit gate passed 98 tests / 24 Docker tests skipped; an additional summary
+  semantics test passed afterward (4 focused LCA tests total). Docker controls
+  above exercise the new integration separately.
+- Scope is selected-check local replay, without a hidden oracle or full-workflow
+  score. Colima stopped after each Docker batch.

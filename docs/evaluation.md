@@ -131,3 +131,11 @@ The first [historical model pilot](experiments/2026-09-19-historical-deepseek.md
 completed four trials with 37/40 authorized calls. Both runners produced 2/2
 verified patches; three trials reached their call cap before explicit submission.
 The report distinguishes verified patches from agents that submitted themselves.
+
+## External CI dataset
+
+[LCA CI builds repair](../benchmarks/lca/README.md) now has a separate local replay
+entry point, `python -m ci_repair.lca`. It deliberately reports selected-check
+success, not the official full-workflow score or a hidden-oracle repair rate.
+Reference and no-op controls must work before model calls begin. See the
+[selection review](benchmark-selection-2026-09-22.md).
