@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import signal
 import threading
 import urllib.error
 import urllib.request
@@ -173,7 +174,48 @@ def test_errors_are_recorded_by_type_and_can_be_requeued(store, tmp_path, monkey
     assert result["status"] == "failed"
     assert "secret" not in json.dumps(result["result"])
     assert store.requeue("owner/repo#7#1")
-    assert store.claim()["run_id"] == 7
+    previous = tmp_path / "runs" / "owner__repo-7-1"
+    (previous / "evidence.txt").write_text("first attempt")
+    seen = []
+
+    def retry(item, directory, policy):
+        seen.append(directory)
+        return {"repair_status": "PASS"}
+
+    result = webhook.process_one(store, POLICY, tmp_path, repair=retry)
+    assert result["status"] == "done"
+    assert seen[0] != previous and seen[0].is_dir()
+    assert (previous / "evidence.txt").read_text() == "first attempt"
+
+
+def test_serve_runs_repairs_on_main_thread(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ci-repair-webhook",
+            "serve",
+            "--port",
+            "0",
+            "--state-dir",
+            str(tmp_path),
+            "--policy",
+            str(tmp_path.parent / "policy.yaml"),
+        ],
+    )
+    monkeypatch.setattr(webhook, "load_policy", lambda *a, **kw: POLICY)
+    monkeypatch.setenv("CI_REPAIR_WEBHOOK_SECRET", SECRET.decode())
+    observed = []
+
+    def check_worker(*args):
+        # This is the same signal operation used by the real repair pipeline.
+        previous = signal.signal(signal.SIGALRM, signal.SIG_DFL)
+        signal.signal(signal.SIGALRM, previous)
+        observed.append(threading.current_thread() is threading.main_thread())
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(webhook, "worker", check_worker)
+    assert webhook.main() == 0
+    assert observed == [True]
 
 
 def test_one_running_repair_per_branch_and_expired_leases_are_not_rerun(store, monkeypatch):

@@ -359,3 +359,42 @@ def test_deny_blocks_prepare_and_policy_is_reevaluated_at_publish(publication):
     with pytest.raises(pub.PublicationError, match="DENY"):
         pub.publish(out, deny)
     assert not pushes(calls)
+
+
+def test_publish_respects_current_repository_path_scope(publication):
+    from ci_repair.policy import Policy
+
+    run, out, remote, repo, report, calls, prs = publication
+    as_run_report(run, report)
+    pub.prepare(run, out, "main", Policy(ALLOW_POLICY))
+    policy = Policy(
+        {**ALLOW_POLICY, "repositories": [{"name": "owner/repo", "allowed_paths": ["other/"]}]}
+    )
+    with pytest.raises(pub.PublicationError, match="DENY"):
+        pub.publish(out, policy)
+    assert not pushes(calls) and not prs
+
+
+def test_current_scope_does_not_widen_verified_scope(publication):
+    from ci_repair.policy import Policy, Verdict
+
+    run, out, remote, repo, report, calls, prs = publication
+    report["changed_files"] = ["other/code.py"]
+    assert pub.publication_gate(report, b"+line", Policy(ALLOW_POLICY)).verdict is Verdict.DENY
+
+
+@pytest.mark.parametrize("missing", ["jobs", "verification", "timeout", "tests"])
+def test_incomplete_job_coverage_cannot_be_published(publication, missing):
+    run, out, remote, repo, report, calls, prs = publication
+    as_run_report(run, report)
+    if missing == "jobs":
+        report["jobs"] = []
+    elif missing == "verification":
+        report["jobs"][0]["final_verification"] = "FAIL"
+    elif missing == "timeout":
+        report["other_unsuccessful_jobs"] = [{"job_id": 99, "conclusion": "timed_out"}]
+    else:
+        report["tests"] *= 2
+    (run / "report.json").write_text(json.dumps(report))
+    with pytest.raises(pub.PublicationError, match="Every unsuccessful job"):
+        pub.verified_run(run)

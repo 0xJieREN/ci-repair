@@ -11,6 +11,7 @@ import hmac
 import json
 import os
 import sqlite3
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -237,7 +238,13 @@ def process_one(
             result, status = {"skipped": reason}, "skipped"
         else:
             directory = state_dir / "runs" / item["key"].replace("/", "__").replace("#", "-")
-            directory.mkdir(parents=True, exist_ok=False, mode=0o700)
+            try:
+                directory.mkdir(parents=True, exist_ok=False, mode=0o700)
+            except FileExistsError:
+                # Preserve evidence from failed/interrupted attempts when explicitly requeued.
+                directory = Path(
+                    tempfile.mkdtemp(prefix=directory.name + "-retry-", dir=directory.parent)
+                )
             result, status = repair(item, directory, policy), "done"
     except Exception as exc:
         # External error text can include credentials; persist only the type.
@@ -322,18 +329,24 @@ def main():
         parser.error("Set CI_REPAIR_WEBHOOK_SECRET (at least 16 bytes) in the environment")
     wake, stop = threading.Event(), threading.Event()
     server = ThreadingHTTPServer((args.host, args.port), make_handler(store, secret, policy, wake))
-    if not args.no_worker:
-        threading.Thread(
-            target=worker, args=(store, policy, state_dir, wake, stop), daemon=True
-        ).start()
+    http_thread = None
     print(f"Listening on http://{args.host}:{server.server_address[1]}/webhook", flush=True)
     try:
-        server.serve_forever()
+        if args.no_worker:
+            server.serve_forever()
+        else:
+            # Repair deadlines use SIGALRM, which Python permits only in the main thread.
+            http_thread = threading.Thread(target=server.serve_forever, daemon=True)
+            http_thread.start()
+            worker(store, policy, state_dir, wake, stop)
     except KeyboardInterrupt:
         pass
     finally:
         stop.set()
         wake.set()
+        if http_thread is not None:
+            server.shutdown()
+            http_thread.join()
         server.server_close()
     return 0
 

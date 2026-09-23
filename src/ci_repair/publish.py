@@ -32,6 +32,13 @@ def verified_run(run_dir: Path) -> tuple[dict, bytes]:
         or any(t.get("returncode") != 0 or t.get("exception_info") for t in tests)
     ):
         raise PublicationError("Only independently verified PASS runs can be published")
+    if report.get("kind") == "run" and (
+        not report.get("jobs")
+        or report.get("other_unsuccessful_jobs")
+        or len(tests) != 2 * len(report["jobs"])
+        or any(job.get("final_verification") != "PASS" for job in report["jobs"])
+    ):
+        raise PublicationError("Every unsuccessful job needs final verification before publication")
     if not patch or report.get("patch_sha256") != digest(patch):
         raise PublicationError(
             "Patch is missing, changed, or from an older run without a digest; verify again"
@@ -56,7 +63,11 @@ def publication_gate(report: dict, patch: bytes, policy: Policy) -> Decision:
     decisions = [
         policy.check_patch(
             report.get("changed_files", []), patch, tuple(report["config"]["allowed_paths"])
-        )
+        ),
+        # The verified scope and current operator scope must both permit the patch.
+        policy.check_patch(
+            report.get("changed_files", []), patch, policy.allowed_paths(ci.get("repository"))
+        ),
     ]
     draft = Verdict(policy.data["publication"]["draft_pr"])
     if draft is not Verdict.ALLOW:
@@ -387,7 +398,16 @@ def main():
         command_parser.add_argument("--policy", type=Path, help="Operator policy YAML")
     args = parser.parse_args()
     try:
-        policy = load_policy(args.policy)
+        run_dir = (
+            Path(json.loads((args.output / "publication.json").read_text())["run_dir"])
+            if args.action == "publish"
+            else args.run_dir
+        ).resolve()
+        report = json.loads((run_dir / "report.json").read_text())
+        untrusted_roots = [run_dir, args.output.resolve() / "repo"]
+        if source_repo := report.get("config", {}).get("repo"):
+            untrusted_roots.append(Path(source_repo))
+        policy = load_policy(args.policy, untrusted_roots=untrusted_roots)
         if args.action == "prepare":
             plan = prepare(args.run_dir.resolve(), args.output.resolve(), args.base, policy)
             print(

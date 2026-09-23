@@ -314,7 +314,9 @@ def step_command(step: dict) -> str:
     body = f"env {env} {run}" if env else run
     if step["working_directory"] != ".":
         body = f"cd -- {shlex.quote(step['working_directory'])} && {body}"
-    return f"( {body} )"
+    command = f"( {body} )"
+    # Tolerate the child shell's exit, without disabling its own errexit behavior.
+    return f"{command} || true" if step.get("continue_on_error") else command
 
 
 def replay_commands(spec: dict) -> tuple[str, str]:
@@ -474,6 +476,8 @@ def reconstruct(
         if not isinstance(container, str) or not re.fullmatch(r"[\w./:@-]{1,200}", container):
             problems.block("job.container must be a static image reference")
             container = None
+        # Actions defaults to sh for run steps inside a job container.
+        defaults.setdefault("shell", "sh")
 
     steps = job.get("steps")
     if not isinstance(steps, list) or not all(isinstance(s, dict) for s in steps):
@@ -637,11 +641,16 @@ def translate_step(
     except ValueError:
         problems.block(f"{where}: working directory escapes the repository")
         directory = "."
-    if step.get("continue-on-error") not in (None, False):
+    tolerate_failure = step.get("continue-on-error") not in (None, False)
+    if tolerate_failure:
         if failing:
             problems.block(f"{where}: continue-on-error on the failing step")
-        script = f"{{\n{script}\n}} || true"
-    return "shell", shell_step(script, directory, shell, {**base_env, **step_env}, where)
+        if step["continue-on-error"] is not True:
+            problems.block(f"{where}: continue-on-error must be a static boolean")
+    record = shell_step(script, directory, shell, {**base_env, **step_env}, where)
+    if tolerate_failure:
+        record["continue_on_error"] = True
+    return "shell", record
 
 
 def shell_step(script: str, directory: str, shell, env: dict, source: str) -> dict:

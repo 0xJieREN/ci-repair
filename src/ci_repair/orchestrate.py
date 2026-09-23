@@ -164,6 +164,7 @@ def repair_run(
             if k in manifest
         },
         "jobs": [],
+        "other_unsuccessful_jobs": manifest.get("other_unsuccessful_jobs", []),
     }
     try:
         return _repair_run(collection, output, repo, manifest, report, model_factory, policy, build)
@@ -187,7 +188,7 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
     archive = output / "source.tar"
     snapshot(repo, archive)
     allowed = policy.allowed_paths(manifest["repository"])
-    report["config"] = {"allowed_paths": list(allowed)}
+    report["config"] = {"repo": str(repo), "allowed_paths": list(allowed)}
     doc = None
     if manifest.get("workflow_path"):
         doc, _ = load_workflow(repo, sha, manifest["workflow_path"])
@@ -311,6 +312,11 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
         repaired_names.append(entry["job_name"])
         result.update(status="REPAIRED", config=cfg)
 
+    # A run-level PASS must not silently omit known timeouts/cancellations.
+    results.extend(
+        {**job, "status": "NOT_REPLAYED", "stop_reason": StopReason.VERIFICATION_FAILED.value}
+        for job in manifest.get("other_unsuccessful_jobs", [])
+    )
     patch = cumulative.read_bytes()
     report["patch_sha256"] = hashlib.sha256(patch).hexdigest()
     report["usage"] = {**usage, "models_used": sorted(usage["models_used"])}

@@ -92,7 +92,34 @@ def test_supported_job_resolves_toolchain_setup_failing_and_regression(tmp_path)
     assert [s["script"] for s in spec["regression"]] == ["ruff check ."]
     assert spec["source"]["step_number"] == 4
     assert len(spec["spec_sha256"]) == 64
-    assert spec_for(tmp_path / "again")["spec_sha256"] == spec["spec_sha256"]
+    repeated = reconstruct(
+        tmp_path / "repo",
+        spec["source"]["commit"],
+        ".github/workflows/ci.yml",
+        job(),
+        "",
+        Policy(),
+        repository="o/r",
+        event="push",
+    )
+    assert repeated["spec_sha256"] == spec["spec_sha256"]
+
+
+def test_continue_on_error_stops_step_but_allows_next_step(tmp_path):
+    workflow = WORKFLOW.replace(
+        "run: pip install -r requirements.txt",
+        "continue-on-error: true\n        run: |\n          false\n          touch not-reached",
+    )
+    spec = spec_for(tmp_path, workflow)
+    assert spec["status"] == SUPPORTED
+    (tmp_path / "pkg").mkdir()
+    result = subprocess.run(
+        ["bash", "-e", "-c", step_command(spec["setup"][0]) + "\ntouch next-step"],
+        cwd=tmp_path,
+    )
+    assert result.returncode == 0
+    assert not (tmp_path / "pkg/not-reached").exists()
+    assert (tmp_path / "next-step").exists()
 
 
 def test_step_commands_preserve_env_directory_and_errexit(tmp_path):
@@ -216,6 +243,8 @@ def test_container_job_and_runner_approximation(tmp_path):
     spec = spec_for(tmp_path / "a", workflow)
     assert spec["base_image"] == "python:3.11-slim"
     assert spec["fidelity"] == "job-container"
+    assert spec["setup"][0]["shell"] == "sh"
+    assert spec["failing"]["shell"] == "bash"  # Explicit step choice wins.
     bare = WORKFLOW.replace(
         "      - uses: actions/setup-python@v5\n        with:\n          python-version: '3.12'\n"
         "          cache: pip\n",

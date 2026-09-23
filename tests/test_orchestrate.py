@@ -158,10 +158,18 @@ def test_unsupported_jobs_never_build_or_start_agents(tmp_path):
 
 @pytest.mark.docker
 @pytest.mark.skipif(os.getenv("CI_REPAIR_DOCKER_TESTS") != "1", reason="Docker opt-in required")
-def test_multi_job_run_accumulates_one_verified_patch(tmp_path):
+@pytest.mark.parametrize("unresolved_job", [False, True])
+def test_multi_job_run_accumulates_one_verified_patch(tmp_path, unresolved_job):
     from test_docker import scripted_model
 
     root = collection(tmp_path, jobs=(("other", "test"), ("unit", "test"), ("lint", "check")))
+    if unresolved_job:
+        manifest_path = root / "run.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["other_unsuccessful_jobs"] = [
+            {"job_id": 99, "job_name": "integration", "conclusion": "timed_out"}
+        ]
+        manifest_path.write_text(json.dumps(manifest))
     models = [
         scripted_model("sed -i 's/value = 0/value = 1/' src/app.py"),  # lint (first by position)
         scripted_model("sed -i 's/flag = False/flag = True/' src/other.py"),  # other
@@ -176,20 +184,27 @@ def test_multi_job_run_accumulates_one_verified_patch(tmp_path):
     policy = Policy({"repositories": [{"name": "owner/repo", "allowed_paths": ["src/"]}]})
     report = repair_run(root, output, model_factory=factory, policy=policy)
     try:
-        assert report["status"] == "PASS", report
-        assert [(j["job_name"], j["status"]) for j in report["jobs"]] == [
+        assert report["status"] == ("PARTIAL" if unresolved_job else "PASS"), report
+        assert report["verified"] is (not unresolved_job)
+        if unresolved_job:
+            assert report["jobs"][-1]["status"] == "NOT_REPLAYED"
+            assert report["other_unsuccessful_jobs"][0]["conclusion"] == "timed_out"
+        addressed = [j for j in report["jobs"] if j["status"] != "NOT_REPLAYED"]
+        assert [(j["job_name"], j["status"]) for j in addressed] == [
             ("lint", "REPAIRED"),
             ("unit", "FIXED_BY_PRIOR"),
             ("other", "REPAIRED"),
         ]
         assert len(started) == 2  # unit never started an agent
         assert sorted(report["changed_files"]) == ["src/app.py", "src/other.py"]
-        assert all(j["final_verification"] == "PASS" for j in report["jobs"])
+        assert all(j["final_verification"] == "PASS" for j in addressed)
         assert len(report["tests"]) == 6
         patch = (output / "patch.diff").read_bytes()
         assert report["patch_sha256"] == hashlib.sha256(patch).hexdigest()
         assert "value = 0" in (root / "repo/src/app.py").read_text()  # input untouched
     finally:
         for job in report["jobs"]:
+            if "environment" not in job:
+                continue
             tag = f"ci-repair-env:{job['environment']['spec_sha256'][:16]}"
             command(["docker", "image", "rm", "-f", tag])
