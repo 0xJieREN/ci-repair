@@ -98,7 +98,7 @@ def run_test(env, script: str, output: Path) -> dict:
 
 
 def verify_patch(config: Config, archive: Path, image: str, patch_path: Path) -> dict:
-    """Public acceptance gate, also used as a common external evaluator."""
+    """Independently verify a patch against the failing and regression commands."""
     report = {}
     results = []
     for name, script in [

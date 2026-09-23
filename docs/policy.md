@@ -3,8 +3,8 @@
 Safety boundaries are decided by code from an operator-owned YAML file, not by
 the model and not by prompts. See the annotated
 [example](../config/policy.example.yaml). Without `--policy`, the CLIs use the
-built-in defaults below; library callers that pass no policy (evaluation
-corpora) keep the permissive legacy rules (paths and file modes only).
+built-in defaults below; direct `pipeline.run` callers that pass no policy keep
+the permissive legacy rules (paths and file modes only).
 
 ## Trust boundary
 

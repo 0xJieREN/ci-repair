@@ -37,8 +37,9 @@ uv run ci-repair-pr prepare runs/verified-repair \
   --base ORIGINAL_FAILED_BRANCH --output runs/publication
 ```
 
-Preparation requires an independently verified PASS report, two passing check
-results, a matching nonempty patch digest and CI source provenance. It checks
+Preparation requires an independently verified PASS report, passing original
+and regression checks for every addressed job, a matching nonempty patch digest
+and CI source provenance. It checks
 that the remote target branch still equals the verified SHA, then creates a
 new private local checkout, applies the patch, validates source paths/file
 modes, and creates one local commit. It writes `publication.json`, `patch.diff`

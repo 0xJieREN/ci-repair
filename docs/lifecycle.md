@@ -74,9 +74,9 @@ make a run `PASS`. The agent never decides that a repair succeeded.
 | `STEP_LIMIT` / `COST_LIMIT` / `WALL_TIME_LIMIT` | budget ended an unsuccessful attempt |
 | `EXECUTION_ERROR` | infrastructure/model error; `error_phase` says where |
 
-The legacy `status` field (`PASS`, `FAIL`, `NO_PATCH`, `PATCH_REJECTED`,
+The existing `status` field (`PASS`, `FAIL`, `NO_PATCH`, `PATCH_REJECTED`,
 `BASELINE_NOT_REPRODUCED`, `TIMEOUT`, `ERROR`, plus `POLICY_DENIED`) is kept for
-evaluation compatibility. Reports also record `budget.requested`,
+report consumers. Reports also record `budget.requested`,
 `budget.policy_max`, `budget.effective`, `budget.clamped` and `usage`
 (model requested, models reported by the provider, model calls, agent steps,
 submissions, probes, estimated cost, command seconds, wall seconds).

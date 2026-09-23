@@ -48,8 +48,11 @@ do not reach the second. Commands must include their own required setup. The sam
 the supplied image; no GitHub-hosted runner is required. Prepared images now
 require GNU `timeout` in addition to Bash/Git (the demo image includes it).
 
-The optional [replay-plan builder](replay-plan.md) extracts one supported static
-failed step for review. Neither gate discovers every command in arbitrary workflow YAML.
+The [automatic environment reconstruction](environment.md) handles a supported
+subset of workflows. The optional [replay-plan builder](replay-plan.md) extracts
+one static failed step for operator review. Neither path can reproduce arbitrary
+workflow YAML.
+
 For another repository, configure the original test command, regression command,
 image, working directory, dependency versions and necessary fixtures explicitly.
 Keep secrets out of repair containers. Tests needing external services need a
@@ -78,4 +81,4 @@ errors near the beginning no longer disappear behind a long cleanup tail.
 Repeated file locations are deduplicated. Unknown formats retain raw fallback;
 all extracted fields remain untrusted evidence, never executable instructions.
 This is a heuristic extractor, not complete language-aware parsing. Its effect
-on real repair success still needs paired model evaluation.
+on real repair success has not been isolated in a representative evaluation.

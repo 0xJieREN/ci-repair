@@ -268,7 +268,7 @@ class Policy:
 
     @classmethod
     def permissive(cls) -> "Policy":
-        """Legacy library callers (evaluation corpora): only paths/modes, no extra limits."""
+        """Direct pipeline callers: only path/mode checks, without policy budgets."""
         unbounded = {"review": 10**9, "deny": 10**9}
         policy = cls(
             {
