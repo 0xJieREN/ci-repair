@@ -28,3 +28,6 @@ Current verification is the project test gate described in
 [verification](verification.md). Any future claim about repair performance needs
 a new, frozen and representative evaluation protocol; the old pilots are retained
 only as historical evidence.
+
+Current tooling for external datasets and the Pi baseline lives in
+[`eval/`](../eval/README.md).

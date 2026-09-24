@@ -26,8 +26,8 @@ trap 'exit 143' TERM
 export MSWEA_GLOBAL_CONFIG_DIR="$check_config_dir"
 export MSWEA_SILENT_STARTUP=1
 uv sync --locked
-uv run ruff check src tests
-uv run ruff format --check src tests
+uv run ruff check src tests eval
+uv run ruff format --check src tests eval
 if [ "$mode" = '--unit' ]; then
   CI_REPAIR_DOCKER_TESTS=0 uv run pytest -q
 else
