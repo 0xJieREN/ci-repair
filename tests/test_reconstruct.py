@@ -220,7 +220,14 @@ def test_conditional_preceding_step_uses_api_conclusion(tmp_path):
     workflow = WORKFLOW.replace(
         "      - name: install\n", "      - name: install\n        if: runner.os == 'Linux'\n"
     )
-    assert spec_for(tmp_path / "a", workflow)["status"] == UNSUPPORTED
+    # Without an API conclusion an evaluable condition decides; an opaque one blocks.
+    assert [s["script"] for s in spec_for(tmp_path / "a", workflow)["setup"]] == [
+        "pip install -r requirements.txt"
+    ]
+    opaque = workflow.replace("runner.os == 'Linux'", "steps.x.outputs.y == 'a'")
+    spec = spec_for(tmp_path / "c", opaque)
+    assert spec["status"] == UNSUPPORTED
+    assert any("cannot evaluate condition" in r for r in spec["unsupported"])
     api = [
         {"name": "Set up job", "conclusion": "success"},
         {"name": "Run actions/checkout@v4", "conclusion": "success"},
@@ -285,6 +292,121 @@ def test_log_provenance_is_bounded_hints():
     assert hints["python"] == "3.12.7"
 
 
+@pytest.mark.parametrize(
+    "expr,expected",
+    [
+        ("matrix.cfg.tip && 'tip-' || ''", ""),
+        ("!matrix.cfg.tip", True),
+        ("matrix.py == '3.9'", True),  # YAML float and string compare as numbers
+        ("matrix.missing == 'ubuntu-latest'", False),  # missing properties are null
+        ("matrix.missing || 'ubuntu-latest'", "ubuntu-latest"),
+        ("runner.os == 'LINUX'", True),  # string comparison ignores case
+        ("matrix['cfg'].os", "ubuntu-20.04"),
+        ("contains('Hello', 'ell') && startsWith('abc', 'A')", True),
+        ("(1 < 2) && !null", True),
+    ],
+)
+def test_expressions_follow_github_semantics(expr, expected):
+    from ci_repair.reconstruct import evaluate
+
+    ctx = {
+        "literals": {"runner.os": "Linux"},
+        "matrix": {"cfg": {"tip": False, "os": "ubuntu-20.04"}, "py": 3.9},
+        "env": {},
+    }
+    assert evaluate(expr, ctx) == expected
+
+
+@pytest.mark.parametrize(
+    "expr", ["hashFiles('x')", "fromJSON('[]')", "steps.a.outputs.b", "github.ref", "success()"]
+)
+def test_unreproducible_expressions_fail_closed(expr):
+    from ci_repair.reconstruct import ExpressionError, evaluate
+
+    with pytest.raises(ExpressionError):
+        evaluate(expr, {"literals": {"github.sha": "0" * 40}})
+
+
+MAPPING_MATRIX = """on: push
+jobs:
+  lint:
+    strategy:
+      matrix:
+        env: [ruff, mypy]
+        lint-with:
+          - {tip-versions: false, os: ubuntu-20.04}
+          - {tip-versions: true, os: ubuntu-latest}
+    name: Check ${{ matrix.lint-with.tip-versions && 'tip-' || '' }}${{ matrix.env }}
+    runs-on: ${{ matrix.lint-with.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - uses: actions/cache@v4
+        with: {path: ~/.cache, key: "${{ hashFiles('**/*.toml') }}"}
+      - name: Test
+        if: ${{ !matrix.lint-with.tip-versions }}
+        run: tox -e ${{ matrix.env }}
+      - name: Upload on failure
+        if: failure()
+        run: exit 1
+      - name: Always
+        if: always()
+        run: echo done
+"""
+
+
+def test_mapping_matrix_expressions_and_later_conditions(tmp_path):
+    spec = spec_for(tmp_path, MAPPING_MATRIX, job("Check mypy", "Test"))
+    assert spec["status"] == SUPPORTED, spec["unsupported"] + spec["review_reasons"]
+    assert spec["runner"]["image"] == "ubuntu-20.04"
+    assert spec["failing"]["script"] == "tox -e mypy"
+    # failure() is false once the failure is fixed; always() still runs as a regression check.
+    assert [s["script"] for s in spec["regression"]] == ["echo done"]
+    assert (
+        spec_for(tmp_path / "tip", MAPPING_MATRIX, job("Check tip-mypy", "Test"))["runner"]["image"]
+        == "ubuntu-24.04"
+    )
+
+
+def test_tool_actions_install_during_build_and_run_as_steps(tmp_path):
+    workflow = WORKFLOW.replace(
+        "        run: python -m pytest -q\n",
+        "        uses: pre-commit/action@v3.0.0\n        with: {extra_args: --all-files -v}\n",
+    ).replace("      - name: unit tests\n        shell: bash\n", "      - name: unit tests\n")
+    spec = spec_for(tmp_path / "a", workflow)
+    assert spec["status"] == SUPPORTED, spec["unsupported"] + spec["review_reasons"]
+    assert spec["setup"][-1]["script"] == "python -m pip install pre-commit"
+    assert spec["failing"]["script"].startswith("pre-commit run ")
+    assert spec["failing"]["script"].endswith("--all-files -v")
+    assert spec["failing"]["env"]["STEP"] == "three"
+    pox = """on: push
+jobs:
+  fmt:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v3
+      - name: Check
+        uses: paolorechia/pox@v1.0.1
+        with: {tox_env: format_check}
+"""
+    spec = spec_for(tmp_path / "b", pox, job("fmt", "Check"))
+    assert spec["status"] == REVIEW, spec["unsupported"]
+    assert spec["base_image"] == "python:3.10-bookworm"  # the runner's default Python
+    assert spec["setup"][0]["script"] == "python3 -m pip install tox"
+    assert spec["failing"]["script"] == "python3 -m tox -e format_check"
+
+
+def test_setup_python_without_version_uses_runner_default(tmp_path):
+    workflow = WORKFLOW.replace(
+        "        with:\n          python-version: '3.12'\n          cache: pip\n", ""
+    ).replace("ubuntu-latest", "ubuntu-22.04")
+    spec = spec_for(tmp_path, workflow)
+    assert spec["status"] == REVIEW
+    assert spec["base_image"] == "python:3.10-bookworm"
+    assert any("runner default Python" in r for r in spec["review_reasons"])
+
+
 @pytest.mark.docker
 @pytest.mark.skipif(
     __import__("os").getenv("CI_REPAIR_DOCKER_TESTS") != "1", reason="Docker opt-in required"
@@ -305,9 +427,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: prepare
-        run: echo ready > /tmp/prepared && touch generated-by-setup
+        run: sudo sh -c 'echo ready > /tmp/prepared' && touch generated-by-setup
       - name: test
-        run: test -f /tmp/prepared && python -c 'from src.app import value; assert value == 1'
+        run: |
+          mkdir -p .tool-env && touch .tool-env/created-on-first-use
+          test -f /tmp/prepared && python -c 'from src.app import value; assert value == 1'
       - name: regression
         run: python -c 'from src.app import value; assert isinstance(value, int)'
 """
@@ -325,6 +449,19 @@ jobs:
     try:
         assert built["status"] == "BUILT", (out / "setup.log").read_text()
         assert built["setup_returncode"] == 0
+        # The warm-up ran the failing command once and kept what it created, without .git.
+        assert built["warm_up_returncode"] == 0
+        command(
+            [
+                "docker",
+                "run",
+                "--rm",
+                built["image_id"],
+                "sh",
+                "-c",
+                "test -f /workspace/.tool-env/created-on-first-use && test ! -e /workspace/.git",
+            ]
+        )
         assert build_environment(spec, out / "source.tar", out, Policy())["reused"] is True
         failing, regression = replay_commands(spec)
         (tmp_path / "log").write_text("AssertionError")
@@ -337,3 +474,23 @@ jobs:
         assert report["changed_files"] == ["src/app.py"]
     finally:
         command(["docker", "image", "rm", "-f", built["tag"]])
+
+
+def test_python_range_uses_the_version_ci_resolved(tmp_path):
+    workflow = WORKFLOW.replace("python-version: '3.12'", "python-version: 3.x")
+    assert spec_for(tmp_path / "a", workflow)["base_image"] == "python:3-bookworm"
+    log = "##[group]Run pytest\nenv:\n  pythonLocation: /opt/hostedtoolcache/Python/3.11.7/x64\n"
+    spec = spec_for(tmp_path / "b", workflow, log=log)
+    assert spec["log_provenance_untrusted"]["python"] == "3.11.7"
+    assert spec["base_image"] == "python:3.11-bookworm"
+    # An exact workflow version is never overridden by the log.
+    assert spec_for(tmp_path / "c", log=log)["base_image"] == "python:3.12-bookworm"
+
+
+def test_custom_shell_template_keeps_its_flags(tmp_path):
+    spec = spec_for(tmp_path, WORKFLOW.replace("shell: bash", "shell: sh -ex {0}"))
+    assert spec["status"] == SUPPORTED, spec["unsupported"]
+    step = {**spec["failing"], "script": "false\ntouch not-reached", "working_directory": "."}
+    result = subprocess.run(["bash", "-c", step_command(step)], cwd=tmp_path, capture_output=True)
+    assert result.returncode != 0 and b"+ false" in result.stderr
+    assert not (tmp_path / "not-reached").exists()

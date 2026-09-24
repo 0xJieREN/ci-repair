@@ -148,7 +148,8 @@ branch workflows have minimal permissions and no sensitive secrets.
   (the report is kept; transfer to the PR head is not implemented).
 - GitHub Actions semantics outside [the supported subset](environment.md):
   services, reusable workflows, arbitrary actions, `GITHUB_ENV`/`OUTPUT`
-  propagation, most expressions, non-Linux runners, multiple toolchains.
+  propagation, expressions using `steps`/`needs`/`hashFiles`/`fromJSON`, non-Linux
+  runners, multiple toolchains.
 - Repository-local policy files (a PR could edit its own rules); submodules,
   LFS and full Git history in replay.
 - Automatic retries, run-level budgets across jobs beyond `repair.max_jobs`,

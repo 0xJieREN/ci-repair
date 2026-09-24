@@ -11,24 +11,26 @@ the manual image/command choice of [reviewed plans](replay-plan.md) for
   with the strict loader (duplicate keys and YAML aliases rejected).
 - API job metadata: job name, per-step conclusions, runner labels.
 - The job log: only bounded provenance hints (runner image and version, action
-  SHAs, `setup-python`'s resolved version). Logs never select commands.
+  SHAs, `setup-python`'s resolved version, also read from `pythonLocation`). Logs
+  never select commands; they only pin `ubuntu-latest` and a Python range such as
+  `3.x` (or no version) to the image CI actually used.
 - Version files from the commit (`.python-version`, `.nvmrc`, `.node-version`, `go.mod`).
 
 ## Supported subset
 
 | Area | Supported | Otherwise |
 |---|---|---|
-| Job selection | unique job whose rendered name (including static matrix `key (v1, v2)` naming) equals the API job name | UNSUPPORTED |
-| Matrix | static scalar lists, `include`/`exclude` per GitHub rules | UNSUPPORTED |
-| Expressions | `matrix.*`, `env.*`, `runner.os`, `runner.arch`, `github.sha`, `github.repository`, `github.workspace`, `github.event_name` | UNSUPPORTED (secrets always) |
-| Runner | `ubuntu-latest` (resolved from the log), `ubuntu-22.04/24.04`, `-arm` variants | UNSUPPORTED |
+| Job selection | unique job whose rendered name (including static matrix `key (v1, v2)` naming for scalar values) equals the API job name | UNSUPPORTED |
+| Matrix | static lists of scalars or mappings, `include`/`exclude` per GitHub rules | UNSUPPORTED (dynamic matrices) |
+| Expressions | GitHub semantics for literals, `!`, `&&`/`\|\|` (operand values), `==`/`!=` (case-insensitive strings, number coercion), comparisons, property/index access (missing → null), `contains`/`startsWith`/`endsWith`; contexts `matrix`, `env` and `runner.os/arch`, `github.sha/repository/workspace/event_name` | UNSUPPORTED: other contexts or properties (`steps`, `needs`, `github.ref`, …), other functions (`hashFiles`, `fromJSON`, …); secrets always |
+| Runner | `ubuntu-latest` (resolved from the log), `ubuntu-20.04` (historical), `ubuntu-22.04/24.04`, `-arm` variants | UNSUPPORTED |
 | Environment | workflow → job → step `env`; job `container.env` | secrets block |
-| Shell | default (`bash -e`), `bash` (`-eo pipefail`), `sh -e`; `defaults.run` precedence | UNSUPPORTED |
+| Shell | default (`bash -e`), `bash` (`-eo pipefail`), `sh -e`, custom `bash\|sh [flags] {0}`; `defaults.run` precedence | UNSUPPORTED |
 | Working directory | static, inside the repository | UNSUPPORTED |
 | Container | static `container:` image (becomes the base image) | credentials/options/services UNSUPPORTED |
-| Actions before the failure | `actions/checkout` (default inputs), `setup-python`/`setup-node`/`setup-go` (static or file versions), `astral-sh/setup-uv`, `pnpm/action-setup`, `actions/cache` and `upload-artifact` (no-ops) | UNSUPPORTED |
-| Conditions before the failure | decided from the API step conclusion (skipped/ran) | UNSUPPORTED if unknown |
-| Steps after the failure | unconditional `run` steps become the regression check | not replayed → REVIEW |
+| Actions | `actions/checkout` (default inputs), `setup-python`/`setup-node`/`setup-go` (static or file versions; `setup-python` without a version → the logged or runner default Python, REVIEW), `astral-sh/setup-uv`, `pnpm/action-setup`, `pre-commit/action` and `paolorechia/pox` (install at build time, then run), `actions/cache` and `upload-artifact` (no-ops; inputs not evaluated) | UNSUPPORTED |
+| Conditions before the failure | the API step conclusion (skipped/ran); without one, the evaluated `if:` | UNSUPPORTED if not evaluable |
+| Steps after the failure | `run` steps and tool actions whose `if:` holds once the failure is fixed (`success()`/`always()` true, `failure()` false) become the regression check | not replayed → REVIEW |
 | State files | — | `GITHUB_ENV/PATH/OUTPUT/STATE` UNSUPPORTED |
 
 The failing command is the failing step; the regression command is the later
@@ -43,22 +45,31 @@ and `GITHUB_REPOSITORY` are set.
 |---|---|---|
 | `job-container` | the job's `container` image | SUPPORTED |
 | `toolchain-image` | `python:<v>-bookworm`, `node:<v>-bookworm`, `golang:<v>-bookworm` | SUPPORTED (Debian, not the Ubuntu runner) |
-| `approximate-runner` | `buildpack-deps:noble/jammy` | REVIEW: hosted-runner preinstalled software is not reproduced |
+| `approximate-runner` | `buildpack-deps:noble/jammy/focal` | REVIEW: hosted-runner preinstalled software is not reproduced |
 
 ## Build and provenance
 
 `build_environment` pulls the base (if absent) for the runner's platform, starts a
 disposable container without credentials, host mounts or Docker socket (network
 only if `sandbox.setup_network: ALLOW`), extracts the verified source snapshot
-into `/workspace`, installs missing `bash/git/timeout/tar` via apt/apk, runs the
-setup steps under `budget.max_setup_seconds`, probes tool versions, and commits
-`ci-repair-env:<spec hash>`. Setup-created files (virtualenvs, `node_modules`,
-editable installs) become part of the replay baseline, never of the patch.
+into `/workspace`, installs missing `bash/git/timeout/tar` via apt/apk (and, for
+root images without one, a `sudo` passthrough, since hosted runners grant
+passwordless sudo), runs the setup steps under `budget.max_setup_seconds`, probes
+tool versions, and commits `ci-repair-env:<spec hash>-r<recipe>`. Setup-created
+files (virtualenvs, `node_modules`, editable installs) become part of the replay
+baseline, never of the patch.
+
+Tools such as tox, nox and pre-commit create their environments on first use,
+which needs network that replay does not have. With setup network, the build
+therefore **warms up**: it runs the failing and regression commands once, ignores
+their results, and keeps only what they created (tool environments, caches);
+`/workspace/.git` is removed and every replay workspace restores tracked files
+from the snapshot. The warm-up's return code, duration and log digest are recorded.
 
 Recorded: spec SHA-256 (workflow hash, source SHA, job/matrix, base, all steps),
 base image ID and repo digests, actual platform, architecture mismatch, tool
 versions, setup log SHA-256, network mode and duration. An existing image with
-the same spec hash is reused. A failed setup gives `UNSUPPORTED_ENVIRONMENT`.
+the same spec hash and build recipe is reused. A failed setup gives `UNSUPPORTED_ENVIRONMENT`.
 
 After the baseline replay, `baseline_matches_ci_log` compares normalized error
 lines (runner paths, timestamps, colors removed) with the CI log. `false`

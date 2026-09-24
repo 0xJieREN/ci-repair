@@ -10,6 +10,7 @@ reasons, instead of a guessed execution.
 import hashlib
 import itertools
 import json
+import math
 import re
 import shlex
 import subprocess
@@ -27,11 +28,18 @@ RUNNERS = {
     "ubuntu-latest": ("ubuntu-24.04", "x64"),
     "ubuntu-24.04": ("ubuntu-24.04", "x64"),
     "ubuntu-22.04": ("ubuntu-22.04", "x64"),
+    "ubuntu-20.04": ("ubuntu-20.04", "x64"),  # retired by GitHub; kept for historical runs
     "ubuntu-24.04-arm": ("ubuntu-24.04", "arm64"),
     "ubuntu-22.04-arm": ("ubuntu-22.04", "arm64"),
 }
 # Approximate hosted-runner bases when no toolchain action or job container pins one.
-RUNNER_BASES = {"ubuntu-24.04": "buildpack-deps:noble", "ubuntu-22.04": "buildpack-deps:jammy"}
+RUNNER_BASES = {
+    "ubuntu-24.04": "buildpack-deps:noble",
+    "ubuntu-22.04": "buildpack-deps:jammy",
+    "ubuntu-20.04": "buildpack-deps:focal",
+}
+# The Python a hosted runner puts on PATH when setup-python selects no version.
+RUNNER_PYTHON = {"ubuntu-24.04": "3.12", "ubuntu-22.04": "3.10", "ubuntu-20.04": "3.8"}
 TOOLCHAIN_IMAGES = {
     "python": "python:{version}-bookworm",
     "node": "node:{version}-bookworm",
@@ -82,6 +90,7 @@ CHECKOUT_INPUTS = {
     "submodules",
     "set-safe-directory",
 }
+CUSTOM_SHELL = re.compile(r"(bash|sh)((?:\s+-[a-zA-Z]+|\s+-o\s+pipefail)*)\s+\{0\}")
 STATE_FILES = re.compile(r"\b(GITHUB_ENV|GITHUB_PATH|GITHUB_OUTPUT|GITHUB_STATE)\b")
 API_FRAME_STEPS = {"Set up job", "Complete job", "Initialize containers", "Stop containers"}
 
@@ -111,8 +120,217 @@ def scalar(value) -> str:
     return "" if value is None else str(value)
 
 
+class ExpressionError(ValueError):
+    """An expression outside the evaluable subset; reconstruction must fail closed."""
+
+
+TOKEN = re.compile(
+    r"\s*(?:(?P<num>0x[0-9a-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|(?P<str>'(?:[^']|'')*')"
+    r"|(?P<op>&&|\|\||==|!=|<=|>=|[()!<>.,\[\]])|(?P<name>[A-Za-z_][\w-]*))"
+)
+STATUS_FUNCTIONS = {"success", "failure", "always", "cancelled"}
+
+
+class ClosedContext(dict):
+    """A context reproduced only in part: an unlisted property is unknown, not null."""
+
+
+def _tokens(expr: str) -> list[tuple[str, str]]:
+    tokens, position = [], 0
+    while position < len(expr.rstrip()):
+        match = TOKEN.match(expr, position)
+        if not match:
+            raise ExpressionError("unparsable")
+        tokens.append((match.lastgroup, match[match.lastgroup]))
+        position = match.end()
+    return tokens
+
+
+def _parse(tokens: list[tuple[str, str]]):
+    """Recursive descent over GitHub's precedence: || < && < ==,!= < <,> < ! < . []."""
+    position = 0
+
+    def peek(*values):
+        return position < len(tokens) and tokens[position][1] in values
+
+    def take(value=None):
+        nonlocal position
+        if position >= len(tokens) or (value is not None and tokens[position][1] != value):
+            raise ExpressionError("unexpected end" if position >= len(tokens) else "syntax")
+        position += 1
+        return tokens[position - 1]
+
+    def binary(operators, operand):
+        def parse():
+            node = operand()
+            while peek(*operators):
+                node = (take()[1], node, operand())
+            return node
+
+        return parse
+
+    def unary():
+        if peek("!"):
+            take()
+            return ("!", unary())
+        return postfix()
+
+    def postfix():
+        node = primary()
+        while peek(".", "["):
+            if take()[1] == ".":
+                kind, name = take()
+                if kind != "name":
+                    raise ExpressionError("syntax")
+                node = ("get", node, ("lit", name))
+            else:
+                node = ("get", node, expression())
+                take("]")
+        return node
+
+    def primary():
+        kind, value = take()
+        if kind == "num":
+            return ("lit", int(value, 16) if value.startswith("0x") else float(value))
+        if kind == "str":
+            return ("lit", value[1:-1].replace("''", "'"))
+        if value == "(":
+            node = expression()
+            take(")")
+            return node
+        if kind != "name":
+            raise ExpressionError("syntax")
+        literal = {"true": True, "false": False, "null": None}
+        if value in literal:
+            return ("lit", literal[value])
+        if peek("("):
+            take()
+            args = []
+            while not peek(")"):
+                args.append(expression())
+                if not peek(")"):
+                    take(",")
+            take(")")
+            return ("call", value, args)
+        return ("ctx", value)
+
+    compare = binary(("<", "<=", ">", ">="), unary)
+    expression = binary(("||",), binary(("&&",), binary(("==", "!="), compare)))
+    tree = expression()
+    if position != len(tokens):
+        raise ExpressionError("syntax")
+    return tree
+
+
+def _number(value) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, (bool, int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            return float(int(text, 16)) if text.lower().startswith("0x") else float(text or 0)
+        except ValueError:
+            return math.nan
+    return math.nan
+
+
+def _kind(value) -> str:
+    if value is None or isinstance(value, (bool, str)):
+        return type(value).__name__
+    return "number" if isinstance(value, (int, float)) else "object"
+
+
+def _equal(left, right) -> bool:
+    if _kind(left) == _kind(right):
+        if isinstance(left, str):
+            return left.lower() == right.lower()
+        return left is right if _kind(left) == "object" else left == right
+    if "object" in (_kind(left), _kind(right)):
+        return False
+    return _number(left) == _number(right)  # GitHub coerces mismatched types to numbers
+
+
+def truthy(value) -> bool:
+    if isinstance(value, float) and math.isnan(value):
+        return False
+    return value not in (None, False, 0, "")
+
+
+def _evaluate(node, contexts: dict, status: dict | None):
+    kind = node[0]
+    if kind == "lit":
+        return node[1]
+    if kind == "ctx":
+        if node[1] == "secrets":
+            raise ExpressionError("secrets")
+        if node[1] not in contexts:
+            raise ExpressionError(f"context {node[1]}")
+        return contexts[node[1]]
+    if kind == "get":
+        base, key = _evaluate(node[1], contexts, status), _evaluate(node[2], contexts, status)
+        if isinstance(base, dict):
+            if isinstance(base, ClosedContext) and key not in base:
+                raise ExpressionError(f"property {key}")
+            return base.get(key) if isinstance(key, str) else None
+        if isinstance(base, list) and isinstance(key, (int, float)) and 0 <= key < len(base):
+            return base[int(key)]
+        return None  # GitHub: dereferencing a missing property yields null
+    if kind == "!":
+        return not truthy(_evaluate(node[1], contexts, status))
+    if kind == "call":
+        name, args = node[1].lower(), node[2]
+        if name in STATUS_FUNCTIONS and status is not None and not args:
+            return status[name]
+        values = [_evaluate(arg, contexts, status) for arg in args]
+        if name in ("contains", "startswith", "endswith") and len(values) == 2:
+            haystack, needle = values
+            if name == "contains" and isinstance(haystack, list):
+                return any(_equal(item, needle) for item in haystack)
+            haystack, needle = scalar(haystack).lower(), scalar(needle).lower()
+            method = {"contains": "__contains__", "startswith": "startswith"}.get(name, "endswith")
+            return getattr(haystack, method)(needle)
+        raise ExpressionError(f"function {node[1]}")
+    operator, left = kind, _evaluate(node[1], contexts, status)
+    if operator == "&&":
+        return _evaluate(node[2], contexts, status) if truthy(left) else left
+    if operator == "||":
+        return left if truthy(left) else _evaluate(node[2], contexts, status)
+    right = _evaluate(node[2], contexts, status)
+    if operator in ("==", "!="):
+        return _equal(left, right) == (operator == "==")
+    if _kind(left) == _kind(right) == "str":
+        left, right = left.lower(), right.lower()
+    else:
+        left, right = _number(left), _number(right)
+    return {"<": left < right, "<=": left <= right, ">": left > right, ">=": left >= right}[
+        operator
+    ]
+
+
+def evaluate(expr: str, ctx: dict, status: dict | None = None):
+    """Evaluate one expression with GitHub semantics over the reproducible contexts only.
+
+    Contexts: matrix, env, and the fixed runner/github values in ctx["literals"]. Other
+    contexts (steps, needs, inputs, vars, ...), secrets and functions such as hashFiles or
+    fromJSON raise ExpressionError. Status functions are available only for conditions.
+    """
+    contexts = {"matrix": ctx.get("matrix", {}), "env": ctx.get("env", {})}
+    for dotted, value in ctx.get("literals", {}).items():
+        scope, _, key = dotted.partition(".")
+        contexts.setdefault(scope, ClosedContext())[key] = value
+    return _evaluate(_parse(_tokens(expr)), contexts, status)
+
+
+def expression_problem(expr: str, error: ExpressionError) -> str:
+    if str(error) == "secrets" or re.search(r"\bgithub\.token\b", expr):
+        return "secrets are unavailable to repairs"
+    return f"unsupported expression {expr[:60]!r}"
+
+
 def render(value, ctx: dict, problems: Problems, where: str):
-    """Evaluate the small expression subset; anything else blocks reconstruction."""
+    """Interpolate ${{ }} expressions; anything outside the subset blocks reconstruction."""
     if isinstance(value, dict):
         return {k: render(v, ctx, problems, where) for k, v in value.items()}
     if isinstance(value, list):
@@ -122,26 +340,42 @@ def render(value, ctx: dict, problems: Problems, where: str):
 
     def substitute(match):
         expr = match.group(1)
-        if re.fullmatch(r"secrets\.[\w-]+|github\.token", expr):
-            problems.block(f"{where}: secrets are unavailable to repairs")
+        try:
+            if re.search(r"\bgithub\.token\b", expr):
+                raise ExpressionError("secrets")
+            result = evaluate(expr, ctx)
+        except ExpressionError as exc:
+            problems.block(f"{where}: {expression_problem(expr, exc)}")
             return ""
-        scoped = re.fullmatch(r"(matrix|env)\.([A-Za-z_][\w-]*)", expr)
-        if scoped:
-            scope = ctx[scoped[1]]
-            if scoped[2] not in scope:
-                problems.block(f"{where}: undefined {expr}")
-                return ""
-            item = scope[scoped[2]]
-            if isinstance(item, (dict, list)):
-                problems.block(f"{where}: non-scalar {expr}")
-                return ""
-            return scalar(item)
-        if expr in ctx["literals"]:
-            return ctx["literals"][expr]
-        problems.block(f"{where}: unsupported expression {expr[:60]!r}")
-        return ""
+        if isinstance(result, (dict, list)):
+            problems.block(f"{where}: non-scalar {expr[:60]}")
+            return ""
+        return scalar(result)
 
     return EXPR.sub(substitute, value)
+
+
+# Replayed steps behave as if every earlier step succeeded (regression steps run "as fixed").
+REPLAY_STATUS = {"success": True, "failure": False, "always": True, "cancelled": False}
+
+
+def condition(value, ctx: dict) -> bool | None:
+    """A step `if:` under REPLAY_STATUS; None when it cannot be evaluated faithfully."""
+    if isinstance(value, bool):
+        return value
+    if not isinstance(value, str):
+        return None
+    whole = re.fullmatch(r"\s*\$\{\{(.*)\}\}\s*", value, re.DOTALL)
+    if whole:
+        value = whole[1]
+    elif "${{" in value:
+        return None  # partial interpolation turns the condition into a string
+    try:
+        result = truthy(evaluate(value, ctx, REPLAY_STATUS))
+    except ExpressionError:
+        return None
+    # Without an explicit status function GitHub adds `success() &&`, which is true here.
+    return result
 
 
 def expand_matrix(matrix, problems: Problems) -> list[dict]:
@@ -152,10 +386,9 @@ def expand_matrix(matrix, problems: Problems) -> list[dict]:
         return []
     base = {k: v for k, v in matrix.items() if k not in ("include", "exclude")}
     if not all(
-        isinstance(v, list) and all(not isinstance(i, (dict, list)) for i in v)
-        for v in base.values()
+        isinstance(v, list) and all(not isinstance(i, list) for i in v) for v in base.values()
     ):
-        problems.block("strategy.matrix values must be static scalar lists")
+        problems.block("strategy.matrix values must be static lists of scalars or mappings")
         return []
     combos = (
         [dict(zip(base, values)) for values in itertools.product(*base.values())] if base else []
@@ -240,9 +473,13 @@ def image_version(version: str, problems: Problems, where: str) -> str | None:
 
 
 def translate_action(
-    step: dict, inputs: dict, repo_files: dict, problems: Problems, where: str
+    step: dict, inputs: dict, repo_files: dict, problems: Problems, where: str, hints: dict
 ) -> dict:
-    """Map an allowlisted action to a toolchain choice and/or a setup script."""
+    """Map an allowlisted action to its replay effect.
+
+    Keys: toolchain (tool, tag), checkout, setup (build-time script, network allowed),
+    script (the step's own command), shell, needs (a tool the image must provide).
+    """
     uses = step["uses"]
     name, _, ref = uses.partition("@")
     if not ref or name.startswith(("./", "docker://")) or name.count("/") < 1:
@@ -273,6 +510,20 @@ def translate_action(
             version = version_from_file(repo_files, scalar(inputs[f"{key}-file"]), problems, where)
         elif version is None and tool == "python" and ".python-version" in repo_files:
             version = version_from_file(repo_files, ".python-version", problems, where)
+        resolved = hints.get("python")  # the version setup-python reported in the log
+        if tool == "python" and resolved and re.fullmatch(r"\d+\.\d+(\.\d+)?", resolved):
+            # A range such as 3.x resolves at run time; the log records what CI used.
+            requested = version or ""
+            if re.fullmatch(r"\d+(?:\.x)*", requested) and resolved.startswith(
+                requested.split(".")[0] + "."
+            ):
+                version = ".".join(resolved.split(".")[:2])
+            elif version is None:
+                version = ".".join(resolved.split(".")[:2])
+        if version is None and tool == "python":
+            # setup-python without a version keeps the runner's Python on PATH.
+            version = RUNNER_PYTHON[hints["runner_image"]]
+            problems.review(f"{where}: runner default Python {version} is approximated")
         if version is None:
             problems.block(f"{where}: {name} requires a static version")
             return {}
@@ -297,6 +548,27 @@ def translate_action(
             problems.block(f"{where}: pnpm/action-setup requires a static version")
             return {}
         return {"script": f"npm install --global --silent pnpm@{shlex.quote(version)}"}
+    if name == "pre-commit/action":
+        # Composite action: install pre-commit, then run it; hook environments are prepared
+        # during the build warm-up because replay has no network.
+        return {
+            "setup": "python -m pip install pre-commit",
+            "script": "pre-commit run --show-diff-on-failure --color=always "
+            + scalar(inputs.get("extra_args", "--all-files")),
+            "shell": "bash",
+            "needs": "python",
+        }
+    if name == "paolorechia/pox":
+        # JavaScript action: `python3 -m pip install tox`, then `python3 -m tox -e TOX_ENV`.
+        tox_env = scalar(inputs.get("tox_env", ""))
+        if not tox_env:
+            problems.block(f"{where}: pox requires tox_env")
+            return {}
+        return {
+            "setup": "python3 -m pip install tox",
+            "script": f"python3 -m tox -e {shlex.quote(tox_env)}",
+            "needs": "python",
+        }
     problems.block(f"{where}: action {name} is outside the supported subset")
     return {}
 
@@ -308,7 +580,9 @@ def step_command(step: dict) -> str:
         "sh": "sh -e -c",
         None: "bash -e -c",
     }
-    shell = flags[step["shell"]]
+    custom = CUSTOM_SHELL.fullmatch(step["shell"] or "")
+    # A custom template runs `command [options] script-file`; -c is the inline equivalent.
+    shell = f"{custom[1]}{custom[2]} -c" if custom else flags[step["shell"]]
     env = " ".join(f"{k}={shlex.quote(v)}" for k, v in sorted(step["env"].items()))
     run = f"{shell} {shlex.quote(step['script'])}"
     body = f"env {env} {run}" if env else run
@@ -338,8 +612,11 @@ def parse_log(log: str) -> dict:
         re.findall(r"Download action repository '([^']{1,120})' \(SHA:([0-9a-f]{40})\)", clean)[:20]
     )
     versions = re.findall(r"Successfully set up (CPython|PyPy) \(([\w.+-]{1,20})\)", clean)
+    locations = re.findall(r"pythonLocation: /opt/hostedtoolcache/Python/(\d+\.\d+\.\d+)/", clean)
     if versions:
         result["python"] = versions[-1][1]
+    elif locations:
+        result["python"] = locations[-1]
     return result
 
 
@@ -368,6 +645,8 @@ def select_job(doc: dict, job_name: str, ctx_base: dict, problems: Problems):
             ctx = {**ctx_base, "matrix": combo, "env": {}}
             if "name" in job:
                 name = render(job["name"], ctx, Problems(), "job.name")
+            elif any(isinstance(v, dict) for v in combo.values()):
+                continue  # default names for mapping values are not reproduced
             elif combo:
                 name = f"{key} ({', '.join(scalar(v) for v in combo.values())})"
             else:
@@ -435,12 +714,13 @@ def reconstruct(
         problems.block(f"runner {labels!r} is outside the supported hosted Ubuntu labels")
         runner = ("ubuntu-24.04", "x64")
     hint = spec["log_provenance_untrusted"].get("runner_image")
-    if labels[0] == "ubuntu-latest" and hint in ("ubuntu-22.04", "ubuntu-24.04"):
+    if labels[0] == "ubuntu-latest" and hint in RUNNER_BASES:
         runner = (hint, runner[1])  # the log says which image ubuntu-latest resolved to
     literals["runner.arch"] = "ARM64" if runner[1] == "arm64" else "X64"
     spec["runner"] = {"labels": labels, "image": runner[0], "arch": runner[1]}
 
-    ctx = {"literals": literals, "matrix": combo, "env": {}}
+    hints = {"runner_image": runner[0], "python": spec["log_provenance_untrusted"].get("python")}
+    ctx = {"literals": literals, "matrix": combo, "env": {}, "hints": hints}
     env = {}
     for scope, where in ((doc.get("env"), "workflow.env"), (job.get("env"), "job.env")):
         if scope is None:
@@ -498,7 +778,7 @@ def reconstruct(
     failing_index = failed[0]
     spec["source"].update(step_number=failing_index + 1, step_name=displays[failing_index])
 
-    toolchains, setup, later = [], [], []
+    toolchains, setup, later, needs = [], [], [], set()
     repo_files = read_version_files(repo, sha)
     checkout_seen = False
     for index, step in enumerate(steps):
@@ -506,7 +786,7 @@ def reconstruct(
         after = index > failing_index
         # A later step only has to be replayable to serve as a regression check.
         local = Problems()
-        kind, record = translate_step(
+        items = translate_step(
             step,
             where,
             index == failing_index,
@@ -527,14 +807,16 @@ def reconstruct(
             problems.block(reason)
         for reason in local.reviews:
             problems.review(reason)
-        if kind == "toolchain":
-            toolchains.append(record)
-        elif kind == "checkout":
-            if checkout_seen:
-                problems.block(f"{where}: multiple checkouts are not supported")
-            checkout_seen = True
-        elif kind == "shell":
-            if index < failing_index:
+        for kind, record in items:
+            if kind == "toolchain":
+                toolchains.append(record)
+            elif kind == "needs":
+                needs.add(record)
+            elif kind == "checkout":
+                if checkout_seen:
+                    problems.block(f"{where}: multiple checkouts are not supported")
+                checkout_seen = True
+            elif kind == "setup" or (kind == "shell" and index < failing_index):
                 setup.append(record)
             elif index == failing_index:
                 spec["failing"] = record
@@ -543,6 +825,10 @@ def reconstruct(
     if not checkout_seen:
         problems.block("job does not use actions/checkout; source layout is unknown")
 
+    if "python" in needs and not toolchains and not container:
+        # Python-based actions without setup-python use the runner's Python.
+        toolchains.append(("python", RUNNER_PYTHON[runner[0]]))
+        problems.review(f"runner default Python {RUNNER_PYTHON[runner[0]]} is approximated")
     distinct = {tool for tool, _ in toolchains}
     if container:
         base, fidelity = container, "job-container"
@@ -575,17 +861,21 @@ def reconstruct(
 def translate_step(
     step, where, failing, after, ctx, env, base_env, defaults, api, index, repo_files, problems
 ):
-    """Return (kind, record): kind is skip, toolchain, checkout or shell."""
+    """Return (kind, record) items: toolchain, checkout, needs, setup or shell."""
     for unknown in sorted(set(step) - STEP_KEYS):
         problems.block(f"{where}.{unknown} is not supported")
-    if "if" in step:
+    if "if" in step and not failing:  # the failing step evidently ran
         conclusion = api.get(index, {}).get("conclusion")
-        if after:
-            problems.block("conditional step after the failure")
-        elif conclusion == "skipped":
-            return "skip", None
-        elif conclusion not in ("success", "failure"):
-            problems.block(f"{where}: cannot determine whether the conditional step ran")
+        ctx["env"] = dict(env)
+        if not after and conclusion == "skipped":
+            return []
+        # The API decides for earlier steps; later steps are judged as if the failure were fixed.
+        if after or conclusion not in ("success", "failure"):
+            decided = condition(step["if"], ctx)
+            if decided is None:
+                problems.block(f"{where}: cannot evaluate condition {str(step['if'])[:60]!r}")
+            elif not decided:
+                return []
     if after and step.get("continue-on-error") not in (None, False):
         problems.block("continue-on-error after the failure")
     step_env = dict(env)
@@ -602,29 +892,32 @@ def translate_step(
             )
     ctx["env"] = step_env
     if "uses" in step:
-        if after:
-            if step["uses"].partition("@")[0] not in NOOP_ACTIONS:
-                problems.block(f"action {step['uses']}")
-            return "skip", None
+        if str(step["uses"]).partition("@")[0] in NOOP_ACTIONS:
+            return []  # cache/artifact inputs (often hashFiles) never affect the replay
         inputs = render(step.get("with") or {}, ctx, problems, f"{where}.with")
-        action = translate_action(step, inputs, repo_files, problems, where)
-        if "toolchain" in action:
-            return "toolchain", action["toolchain"]
+        action = translate_action(step, inputs, repo_files, problems, where, ctx["hints"])
+        if after and ("toolchain" in action or "checkout" in action):
+            problems.block(f"action {step['uses']} after the failure")
+            return []
+        items = [("toolchain", action["toolchain"])] if "toolchain" in action else []
         if action.get("checkout"):
-            return "checkout", None
+            items.append(("checkout", None))
+        if "needs" in action:
+            items.append(("needs", action["needs"]))
+        shell, step_env = action.get("shell", "sh"), {**base_env, **step_env}
+        if "setup" in action:
+            items.append(("setup", shell_step(action["setup"], ".", shell, step_env, where)))
         if "script" in action:
-            return "shell", shell_step(
-                action["script"], ".", "sh", {**base_env, **step_env}, f"{where}.uses"
-            )
-        return "skip", None
+            items.append(("shell", shell_step(action["script"], ".", shell, step_env, where)))
+        return items
     if not isinstance(step.get("run"), str):
         problems.block(f"{where}: expected run or uses")
-        return "skip", None
+        return []
     script = render(step["run"], ctx, problems, f"{where}.run")
     if STATE_FILES.search(script):
         problems.block(f"{where}: GITHUB_ENV/PATH/OUTPUT/STATE propagation is not supported")
     shell = step.get("shell", defaults.get("shell"))
-    if shell not in (None, "bash", "sh"):
+    if shell not in (None, "bash", "sh") and not CUSTOM_SHELL.fullmatch(str(shell)):
         problems.block(f"{where}: shell {shell!r} is not supported")
         shell = None
     try:
@@ -650,7 +943,7 @@ def translate_step(
     record = shell_step(script, directory, shell, {**base_env, **step_env}, where)
     if tolerate_failure:
         record["continue_on_error"] = True
-    return "shell", record
+    return [("shell", record)]
 
 
 def shell_step(script: str, directory: str, shell, env: dict, source: str) -> dict:
@@ -695,8 +988,37 @@ if [ -n "$missing" ]; then
     echo "replay image lacks:$missing" >&2; exit 90
   fi
 fi
+if ! command -v sudo >/dev/null 2>&1 && [ "$(id -u)" = 0 ]; then
+  mkdir -p /usr/local/bin
+  cat > /usr/local/bin/sudo <<'SUDO'
+#!/bin/sh
+# Hosted runners grant passwordless sudo; the replay already runs as root.
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -E|-H|-n|-S|-k) shift ;;
+    --) shift; break ;;
+    -*) echo "ci-repair sudo: unsupported option $1" >&2; exit 1 ;;
+    *=*) export "$1"; shift ;;
+    *) break ;;
+  esac
+done
+exec "$@"
+SUDO
+  chmod 755 /usr/local/bin/sudo
+fi
 mkdir -p /workspace && tar -xf /tmp/source.tar -C /workspace && rm -f /tmp/source.tar
 """
+# Tools such as tox, nox and pre-commit install environments on first use. Replay is
+# offline, so the build runs the replay commands once with setup network and keeps only
+# what they cached; tracked files are restored from the snapshot in every workspace.
+WARM_UP = """cd /workspace
+git init -q && git add -A && git -c user.name=ci-repair -c user.email=ci-repair@localhost \\
+  -c commit.gpgsign=false commit -qm warm-up >/dev/null
+{commands}
+rm -rf /workspace/.git
+"""
+# Bump when the build procedure changes, so older images are not reused as equivalent.
+BUILD_RECIPE = 2
 PROBE = (
     "for t in python3 node go uv pnpm npm; do command -v $t >/dev/null 2>&1 && "
     'printf "%s=%s\\n" "$t" "$($t --version 2>&1 | head -n1)"; done; true'
@@ -709,6 +1031,36 @@ def docker(
     return subprocess.run(["docker", *args], capture_output=True, timeout=timeout, check=check)
 
 
+def warm_up(container: str, spec: dict, output: Path, seconds: int) -> dict:
+    """Run the replay commands once with network; failures are expected and ignored."""
+    steps = [spec["failing"], *spec["regression"]]
+    commands = "\n".join(f"{step_command(s)} || true" for s in steps)
+    (output / "warm-up.sh").write_text(WARM_UP.format(commands=commands))
+    docker(["cp", str(output / "warm-up.sh"), f"{container}:/tmp/ci-repair-warm-up.sh"])
+    started = time.monotonic()
+    result = docker(
+        [
+            "exec",
+            "-w",
+            "/workspace",
+            container,
+            "timeout",
+            f"{seconds}s",
+            "bash",
+            "/tmp/ci-repair-warm-up.sh",
+        ],
+        timeout=seconds + 30,
+        check=False,
+    )
+    log = result.stdout + result.stderr
+    (output / "warm-up.log").write_bytes(log)
+    return {
+        "warm_up_returncode": result.returncode,
+        "warm_up_seconds": time.monotonic() - started,
+        "warm_up_log_sha256": hashlib.sha256(log).hexdigest(),
+    }
+
+
 def build_environment(spec: dict, archive: Path, output: Path, policy: Policy) -> dict:
     """Run allowlisted setup once in a disposable container and commit the replay image.
 
@@ -717,7 +1069,7 @@ def build_environment(spec: dict, archive: Path, output: Path, policy: Policy) -
     """
     if spec["status"] == UNSUPPORTED:
         raise ValueError("Cannot build an unsupported environment")
-    tag = f"ci-repair-env:{spec['spec_sha256'][:16]}"
+    tag = f"ci-repair-env:{spec['spec_sha256'][:16]}-r{BUILD_RECIPE}"
     provenance = {"tag": tag, "spec_sha256": spec["spec_sha256"], "base_image": spec["base_image"]}
     existing = docker(["image", "inspect", "--format={{.Id}}", tag], check=False)
     if existing.returncode == 0:
@@ -802,6 +1154,8 @@ def build_environment(spec: dict, archive: Path, output: Path, policy: Policy) -
         if result.returncode != 0:
             provenance["status"] = "SETUP_FAILED"
             return provenance
+        if network != "none":
+            provenance.update(warm_up(container, spec, output, seconds))
         tools = docker(["exec", container, "sh", "-c", PROBE], check=False).stdout.decode(
             errors="replace"
         )
