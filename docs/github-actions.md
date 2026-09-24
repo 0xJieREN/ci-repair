@@ -64,6 +64,6 @@ uv run ci-repair-github 0xJieREN/ci-repair RUN_ID --all-jobs \
   --output runs/github-smoke
 ```
 
-The example policy allows only `examples/buggy/src/` for this repository. Live
-publication remains a separate acceptance step; local tests simulate GitHub PR
-responses and never create an actual PR.
+The example policy allows only `examples/buggy/src/` for this repository. Local
+tests simulate GitHub PR responses and never create an actual PR; live
+publication was exercised once in the [acceptance run](acceptance.md).

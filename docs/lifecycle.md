@@ -159,6 +159,7 @@ branch workflows have minimal permissions and no sensitive secrets.
 Automated tests exercise the real mini loop, real Docker builds from
 reconstructed specs, multi-job accumulation, early stop, probes, the HTTP
 intake and the SQLite queue, and publication against a real bare Git remote.
-GitHub API responses and PR creation are simulated in tests. As of this version
-no live webhook delivery, live multi-job run or automatic live draft PR has been
-performed; do that as a deliberate acceptance step on a low-privilege repository.
+GitHub API responses and PR creation are simulated in tests. The
+[live acceptance run](acceptance.md) of 2026-09-24 exercised real webhook
+delivery, deduplication, the stale-source check, a three-job repair and an
+automatic draft PR on a toy repository; that page lists what it did not cover.

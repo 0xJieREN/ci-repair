@@ -65,7 +65,7 @@ GitHub's Linux/x86 runners can differ. For platform-sensitive code, run the gate
 on a Linux/x86 server with the required image and runtime versions. A complete
 GitHub runner image, event permissions, branch protection, GitHub API behavior,
 OIDC and hosted services are not recreated by these tests. Real PR publication
-still needs a deliberate live acceptance step.
+was exercised separately in the [live acceptance run](acceptance.md).
 
 `act` is optional if you specifically want to execute workflow YAML locally.
 It is not needed for this repository's gate: its runner images differ from

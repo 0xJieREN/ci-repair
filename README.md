@@ -12,8 +12,9 @@ workflow_run failure → signed webhook → canonical GitHub admission
 ```
 
 The [repair lifecycle](docs/lifecycle.md) describes the current system. It is an
-alpha: local tests cover the workflow, but a live webhook-to-draft-PR acceptance
-run remains to be done. Unsupported workflow features fail closed.
+alpha: local tests cover the workflow, and one [live acceptance run](docs/acceptance.md)
+took a real three-job failure from signed webhook to verified draft PR on a toy
+repository. Unsupported workflow features fail closed.
 
 ## Run the automatic flow
 
