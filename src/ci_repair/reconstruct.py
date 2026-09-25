@@ -1087,15 +1087,21 @@ done
 # build downloads them, at the versions the setup index serves, into a local wheelhouse
 # that pip and uv use instead of an index during replay.
 WHEELHOUSE = """dir=/opt/ci-repair/wheelhouse
-command -v python3 >/dev/null 2>&1 && python3 -m pip --version >/dev/null 2>&1 || exit 0
+pip=""
+# The system Python may lack pip (e.g. apt's python3); tool environments bring their own.
+for candidate in "python3 -m pip" /workspace/.tox/*/bin/pip /workspace/.venv/bin/pip \\
+    /workspace/venv/bin/pip; do
+  $candidate --version >/dev/null 2>&1 && pip=$candidate && break
+done
+[ -n "$pip" ] || exit 0
 mkdir -p "$dir"
-python3 -m pip download -q --dest "$dir" -r /tmp/ci-repair-build-requires.txt || exit 0
+$pip download -q --dest "$dir" -r /tmp/ci-repair-build-requires.txt || exit 0
 printf '[global]\\nfind-links = %s\\nno-index = true\\n' "$dir" > /etc/pip.conf
 mkdir -p /etc/uv && printf 'find-links = ["%s"]\\nno-index = true\\n' "$dir" > /etc/uv/uv.toml
 ls "$dir" | wc -l
 """
 # Bump when the build procedure changes, so older images are not reused as equivalent.
-BUILD_RECIPE = 4
+BUILD_RECIPE = 5
 PROBE = (
     "for t in python3 node go uv pnpm npm; do command -v $t >/dev/null 2>&1 && "
     'printf "%s=%s\\n" "$t" "$($t --version 2>&1 | head -n1)"; done; true'

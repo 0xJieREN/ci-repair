@@ -73,6 +73,8 @@ def replay_job(entry, archive, reference, directory, policy, network, setup_env)
             "setup_seconds",
             "warm_up_returncode",
             "warm_up_seconds",
+            "wheelhouse_files",
+            "checkout",
             "architecture_mismatch",
         )
     } | {"fidelity": spec["fidelity"], "base_image": spec["base_image"]}

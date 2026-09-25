@@ -622,3 +622,20 @@ def test_build_requirements_come_from_pyproject_as_data(tmp_path):
     )
     broken = spec_for(tmp_path / "c", extra={"pyproject.toml": "[build-system\n"})
     assert broken["build_requires"] == sorted(DEFAULT_BUILD_REQUIRES)
+
+
+def test_wheelhouse_uses_a_tool_environment_pip_when_python_has_none(tmp_path):
+    from ci_repair.reconstruct import WHEELHOUSE
+
+    fake = tmp_path / ".tox/py/bin/pip"
+    fake.parent.mkdir(parents=True)
+    fake.write_text('#!/bin/sh\necho "fake pip $1"\n')
+    fake.chmod(0o755)
+    discovery = WHEELHOUSE.split('mkdir -p "$dir"')[0]
+    script = discovery.replace("/workspace", str(tmp_path)).replace(
+        '"python3 -m pip"', "no-such-python3"
+    )
+    result = subprocess.run(
+        ["bash", "-c", script + 'echo "$pip"'], capture_output=True, text=True, check=True
+    )
+    assert result.stdout.strip() == str(fake)
