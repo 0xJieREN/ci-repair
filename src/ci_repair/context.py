@@ -65,6 +65,8 @@ def failure_evidence(log: str) -> dict:
 
 
 TIMESTAMP = re.compile(r"^\ufeff?\d{4}-\d\d-\d\dT[\d:.]+Z ")
+# Wrappers such as JavaScript actions prefix the tool's own lines with their stream.
+STREAM = re.compile(r"^(?:stdout|stderr):\s*")
 WORKDIR = re.compile(r"/home/runner/work/[^/\s]+/[^/\s]+/|/__w/[^/\s]+/[^/\s]+/|/workspace/")
 
 
@@ -72,7 +74,7 @@ def error_signature(text: str) -> set[str]:
     """Normalized error lines, independent of runner paths, timestamps and colors."""
     signature = set()
     for line in text.splitlines():
-        line = WORKDIR.sub("", TIMESTAMP.sub("", ANSI.sub("", line))).strip()
+        line = WORKDIR.sub("", STREAM.sub("", TIMESTAMP.sub("", ANSI.sub("", line)))).strip()
         if ERROR.search(line):
             signature.add(" ".join(line.split())[:200])
     return signature

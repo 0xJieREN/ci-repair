@@ -1,4 +1,4 @@
-from ci_repair.context import failure_evidence
+from ci_repair.context import evidence_overlap, failure_evidence
 
 
 def test_early_error_survives_long_cleanup_tail_with_source_lines():
@@ -39,3 +39,9 @@ def test_baseline_evidence_overlap_ignores_runner_paths_and_timestamps():
     assert evidence_overlap(ci, "AssertionError: expected 14, got 9\n") is True
     assert evidence_overlap(ci, "ModuleNotFoundError: No module named 'x'\n") is False
     assert evidence_overlap("all good\n", "anything") is None
+
+
+def test_baseline_overlap_ignores_stream_prefixes_of_wrapping_actions():
+    ci = "2026-01-01T00:00:00Z stderr: ERROR: /home/runner/work/b/b/pkg/edit.py Imports are unsorted\n"
+    replay = "ERROR: /workspace/pkg/edit.py Imports are unsorted\n"
+    assert evidence_overlap(ci, replay) is True
