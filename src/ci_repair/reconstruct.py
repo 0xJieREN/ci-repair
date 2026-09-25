@@ -992,7 +992,15 @@ def read_build_requires(repo: Path, sha: str) -> list[str]:
     requires = [r.strip() for r in declared if isinstance(r, str)]
     # Requirement lines only: options such as --index-url are dropped.
     requires = [r for r in requires if r and not r.startswith("-") and "\n" not in r]
-    return sorted(set(requires + DEFAULT_BUILD_REQUIRES))[:50]
+    # Older pip rejects a project named twice, so defaults only fill in missing projects.
+    named = {requirement_name(r) for r in requires}
+    defaults = [r for r in DEFAULT_BUILD_REQUIRES if requirement_name(r) not in named]
+    return sorted(set(requires + defaults))[:50]
+
+
+def requirement_name(requirement: str) -> str:
+    match = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", requirement)
+    return re.sub(r"[-_.]+", "-", match[0]).lower() if match else requirement
 
 
 def read_version_files(repo: Path, sha: str) -> dict:
@@ -1135,8 +1143,9 @@ def wheelhouse(container: str, spec: dict, output: Path, env_args: list) -> int 
     result = docker(
         ["exec", *env_args, container, "bash", "-c", WHEELHOUSE], timeout=900, check=False
     )
-    count = result.stdout.decode().strip()
-    return int(count) if count.isdigit() else None
+    (output / "wheelhouse.log").write_bytes(result.stdout + result.stderr)
+    lines = result.stdout.decode().split()
+    return int(lines[-1]) if lines and lines[-1].isdigit() else None
 
 
 def warm_up(container: str, spec: dict, output: Path, seconds: int, env_args: list) -> dict:

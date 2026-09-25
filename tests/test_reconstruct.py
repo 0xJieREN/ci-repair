@@ -622,6 +622,10 @@ def test_build_requirements_come_from_pyproject_as_data(tmp_path):
     )
     broken = spec_for(tmp_path / "c", extra={"pyproject.toml": "[build-system\n"})
     assert broken["build_requires"] == sorted(DEFAULT_BUILD_REQUIRES)
+    # A declared project replaces its default: older pip rejects double requirements.
+    own = '[build-system]\nrequires = ["Setuptools_SCM", "setuptools"]\n'
+    spec = spec_for(tmp_path / "d", extra={"pyproject.toml": own})
+    assert spec["build_requires"] == ["Setuptools_SCM", "setuptools", "wheel"]
 
 
 def test_wheelhouse_uses_a_tool_environment_pip_when_python_has_none(tmp_path):
