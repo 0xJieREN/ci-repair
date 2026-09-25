@@ -83,6 +83,32 @@ The 39 tasks come from only 13 repositories (up to 6 each), so an agent comparis
 must report results per repository and use a clustered or paired analysis, not
 treat the tasks as independent.
 
+## CI Repair versus Pi
+
+`compare.py` runs both agents on usable tasks under the same conditions and grades
+them with one external check. Each task is packaged once: collection, snapshot and
+job images built through the frozen mirror. Then, per repetition, arms alternate:
+
+- `ci-repair`: the production `repair_run` path on the task as a collection.
+- `pi`: one Pi session over all failed jobs, in a network-less container from the
+  first job's image, given the same commands and log excerpts.
+
+Both use `deepseek/deepseek-flash` with the provider's default thinking (enabled;
+Pi sends no effort level for this model), 30 model calls and 1200 s per failed job
+(Pi's session gets the sum), and 600 s per command. Grading applies the final patch
+to the original tree and requires every failed job's failing and regression
+commands to pass in fresh containers, and the patch policy not to deny it; an
+arm's own verdict is only recorded. Cost is computed for both from provider token
+counts with `config/deepseek-pricing.json`. Each invocation appends its commit,
+versions and budgets to `experiment.jsonl`; finished trials are skipped on rerun.
+
+```sh
+uv run --with pyarrow python eval/compare.py --output runs/compare --env-file .env \
+  --network container:pypi-wayback --mirror http://localhost:8080 \
+  --tasks 4,82 --repetitions 3
+uv run --with pyarrow python eval/compare.py --output runs/compare --summarize
+```
+
 ## Pi tool routing
 
 `pi/docker-tools.ts` lets the [Pi](https://github.com/earendil-works/pi) coding
