@@ -54,6 +54,35 @@ per task (no secrets) and writes a summary table to the run page:
 gh workflow run lca-replay.yml -f tasks=82,107       # empty: all 68 tasks
 ```
 
+Hosted run [36124065326](https://github.com/0xJieREN/ci-repair/actions/runs/36124065326)
+(2026-09-25, all 68 tasks):
+
+| Difficulty | USABLE | REFERENCE_FAILED | BASELINE_NOT_REPRODUCED | SETUP_FAILED | UNSUPPORTED | ERROR | Total |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 0 | 25 | 4 | 1 | 2 | 2 | 2 | 36 |
+| 1 | 4 | 2 | 0 | 0 | 1 | 0 | 7 |
+| 2 | 9 | 5 | 1 | 2 | 2 | 0 | 19 |
+| 3 | 1 | 3 | 0 | 0 | 2 | 0 | 6 |
+| All | **39** | 14 | 2 | 4 | 7 | 2 | 68 |
+
+The first full run had 30 usable tasks. Replay fidelity fixes found by these runs
+(checkout history, hosted-runner apt behavior, warm-up cleanup, build pids,
+offline build requirements) raised that to 39. Of the 49 usable jobs, 37 replay an
+error line from their CI log. Five (beets) differed only by the `stderr:` prefix
+its action adds, which the comparison now ignores. For the other seven the
+heuristic finds no error line to compare; the one checked by hand (task 4)
+replays the CI failure verbatim.
+
+What still blocks the other 29 comes from the tasks, not from the replay:
+tests or regression steps that need the internet (the replay is offline by
+design), coverage gates that miss once network tests skip, an unpinned Git
+dependency, preinstalled Rust, a 2 GB memory limit, submodules, a cache from another
+job, and `sysctl` in a container.
+
+The 39 tasks come from only 13 repositories (up to 6 each), so an agent comparison
+must report results per repository and use a clustered or paired analysis, not
+treat the tasks as independent.
+
 ## Pi tool routing
 
 `pi/docker-tools.ts` lets the [Pi](https://github.com/earendil-works/pi) coding
