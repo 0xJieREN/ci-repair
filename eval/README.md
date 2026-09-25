@@ -37,6 +37,23 @@ commit date; the official score runs those modified workflows on GitHub. Replays
 that install today's packages can fail differently from the recorded CI, so a
 build/baseline evaluation must use the same frozen index.
 
+## LCA dynamic replay
+
+`lca_replay.py` goes one step further for each task. For every failed job it builds
+the replay image, with setup installing through the same PyPI wayback mirror the
+official workflows use, frozen at the dataset's date. It then requires the failing
+command to fail again offline, and requires the dataset's reference diff to pass the
+fresh-container verifier. Only tasks where every failed job passes all three
+(`USABLE`) are fair ground for comparing repair agents. The failure modes are
+`SETUP_FAILED`, `BASELINE_NOT_REPRODUCED` and `REFERENCE_FAILED`. No model is called.
+
+The manual workflow `.github/workflows/lca-replay.yml` runs one hosted x86 runner
+per task (no secrets) and writes a summary table to the run page:
+
+```sh
+gh workflow run lca-replay.yml -f tasks=82,107       # empty: all 68 tasks
+```
+
 ## Pi tool routing
 
 `pi/docker-tools.ts` lets the [Pi](https://github.com/earendil-works/pi) coding

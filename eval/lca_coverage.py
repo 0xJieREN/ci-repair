@@ -119,24 +119,13 @@ def failed_step(doc, job_name, number, file_step, literals) -> tuple[str | None,
     return None, "failed step does not map to the workflow"
 
 
-def audit(repos: Path, row: dict, policy: Policy) -> dict:
-    repo = repos / str(row["id"])
+def job_specs(repo: Path, row: dict, policy: Policy) -> list[dict]:
+    """One entry per failed job: job, step, log and either a spec or an unsupported reason.
+
+    Raises for an unreadable workflow; the caller records that as a task-level status.
+    """
     repository = f"{row['repo_owner']}/{row['repo_name']}"
-    record = {
-        "id": row["id"],
-        "repository": repository,
-        "difficulty": row["difficulty"],
-        "commit_date": row["commit_date"],
-        "workflow_path": row["workflow_path"],
-        "jobs": [],
-    }
-    if row.get("fetch_error"):
-        return {**record, "status": "SOURCE_UNAVAILABLE", "reason": row["fetch_error"]}
-    try:
-        doc, _ = load_workflow(repo, row["sha_fail"], row["workflow_path"])
-    except Exception as exc:  # noqa: BLE001 - every failure mode is part of the audit
-        reason = f"{type(exc).__name__}: {str(exc)[:160]}"
-        return {**record, "status": "WORKFLOW_UNREADABLE", "reason": reason}
+    doc, _ = load_workflow(repo, row["sha_fail"], row["workflow_path"])
     literals = {
         "runner.os": "Linux",
         "github.sha": row["sha_fail"],
@@ -149,15 +138,16 @@ def audit(repos: Path, row: dict, policy: Policy) -> dict:
         job, _, rest = log["step_name"].rpartition("/")
         match = re.fullmatch(r"(\d+)_(.*)\.txt", rest)
         by_job[job].append((int(match[1]), match[2], log["log"]))
+    entries = []
     for file_job, steps in by_job.items():
         number, file_step, log = min(steps)
         job_name = real_job_name(doc, file_job, literals)
-        entry = {"job": job_name, "step": file_step}
+        entry = {"job": job_name, "step": file_step, "log": log, "spec": None}
         display, problem = failed_step(doc, job_name, number, file_step, literals)
         if problem:
-            entry.update(status="UNSUPPORTED", unsupported=[problem], review_reasons=[])
+            entry["problem"] = problem
         else:
-            spec = reconstruct(
+            entry["spec"] = reconstruct(
                 repo,
                 row["sha_fail"],
                 row["workflow_path"],
@@ -167,19 +157,49 @@ def audit(repos: Path, row: dict, policy: Policy) -> dict:
                 repository=repository,
                 event="push",
             )
-            entry.update(
-                status=spec["status"],
-                fidelity=spec.get("fidelity"),
-                base_image=spec.get("base_image"),
-                unsupported=spec["unsupported"],
-                review_reasons=spec["review_reasons"],
-            )
-        record["jobs"].append(entry)
-    statuses = {j["status"] for j in record["jobs"]}
+        entries.append(entry)
+    return entries
+
+
+def task_status(statuses) -> str:
+    """A task is only as replayable as its least replayable failed job."""
+    statuses = set(statuses)
     for status in ("UNSUPPORTED", "REVIEW_REQUIRED", "SUPPORTED"):
         if status in statuses:
-            record["status"] = status
-            break
+            return status
+    return "UNSUPPORTED"
+
+
+def audit(repos: Path, row: dict, policy: Policy) -> dict:
+    record = {
+        "id": row["id"],
+        "repository": f"{row['repo_owner']}/{row['repo_name']}",
+        "difficulty": row["difficulty"],
+        "commit_date": row["commit_date"],
+        "workflow_path": row["workflow_path"],
+        "jobs": [],
+    }
+    if row.get("fetch_error"):
+        return {**record, "status": "SOURCE_UNAVAILABLE", "reason": row["fetch_error"]}
+    try:
+        entries = job_specs(repos / str(row["id"]), row, policy)
+    except Exception as exc:  # noqa: BLE001 - every failure mode is part of the audit
+        reason = f"{type(exc).__name__}: {str(exc)[:160]}"
+        return {**record, "status": "WORKFLOW_UNREADABLE", "reason": reason}
+    for entry in entries:
+        spec = entry["spec"]
+        if spec is None:
+            job = {"status": "UNSUPPORTED", "unsupported": [entry["problem"]], "review_reasons": []}
+        else:
+            job = {
+                "status": spec["status"],
+                "fidelity": spec.get("fidelity"),
+                "base_image": spec.get("base_image"),
+                "unsupported": spec["unsupported"],
+                "review_reasons": spec["review_reasons"],
+            }
+        record["jobs"].append({"job": entry["job"], "step": entry["step"], **job})
+    record["status"] = task_status(j["status"] for j in record["jobs"])
     return record
 
 
