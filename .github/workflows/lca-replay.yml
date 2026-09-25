@@ -43,10 +43,11 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
+      # Builds share the mirror's network namespace and reach it as localhost, exactly as the
+      # official workflows do; pip and tox trust plain HTTP only there.
       - name: Start the PyPI wayback mirror used by the official LCA workflows
         run: |
-          docker network create lca
-          docker run -d --name pypi-wayback --network lca -p 8629:8080 ghcr.io/waleko/pypi-wayback
+          docker run -d --name pypi-wayback -p 8629:8080 ghcr.io/waleko/pypi-wayback
           for _ in $(seq 30); do
             curl -sf http://localhost:8629/2024-01-10/pip/ >/dev/null && exit 0
             sleep 2
@@ -56,7 +57,7 @@ jobs:
       - name: Replay task ${{ matrix.task }}
         run: |
           uv run --with pyarrow python eval/lca_replay.py --task ${{ matrix.task }} \
-            --output runs/lca --network lca --mirror http://pypi-wayback:8080
+            --output runs/lca --network container:pypi-wayback --mirror http://localhost:8080
       - name: Keep results and logs
         if: always()
         uses: actions/upload-artifact@v4

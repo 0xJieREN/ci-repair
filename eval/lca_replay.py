@@ -9,7 +9,7 @@ No model is called.
 
     uv run --with pyarrow python eval/lca_replay.py --list --output runs/lca [IDS]
     uv run --with pyarrow python eval/lca_replay.py --task 82 --output runs/lca \\
-        --network lca --mirror http://pypi-wayback:8080
+        --network container:pypi-wayback --mirror http://localhost:8080
     uv run --with pyarrow python eval/lca_replay.py --summarize runs/lca/tasks
 """
 
@@ -52,7 +52,7 @@ def mirror_env(row: dict, mirror: str | None) -> dict:
     return {
         "PIP_INDEX_URL": f"{mirror}/{date}",
         "UV_INDEX_URL": f"{mirror}/{date}",
-        # pip trusts plain HTTP only on localhost, which the official workflows use.
+        # pip trusts plain HTTP only on localhost; tox does not pass PIP_TRUSTED_HOST on.
         "PIP_TRUSTED_HOST": host,
         "UV_INSECURE_HOST": host,
     }
@@ -207,8 +207,8 @@ def main():
     parser.add_argument("ids", nargs="?", default="", help="Comma-separated IDs for --list")
     parser.add_argument("--output", type=Path, default=Path("runs/lca"))
     parser.add_argument("--parquet", type=Path)
-    parser.add_argument("--network", help="Docker network that reaches the mirror")
-    parser.add_argument("--mirror", help="PyPI wayback base URL, e.g. http://pypi-wayback:8080")
+    parser.add_argument("--network", help="Setup network, e.g. container:pypi-wayback")
+    parser.add_argument("--mirror", help="PyPI wayback base URL, e.g. http://localhost:8080")
     args = parser.parse_args()
     if args.summarize:
         print(summarize(args.summarize), end="")
