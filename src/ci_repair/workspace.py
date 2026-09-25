@@ -149,7 +149,7 @@ def workspace(archive: Path, image: str, timeout: int, lifetime: int):
             "command -v timeout >/dev/null && tar -xf /tmp/source.tar -C /workspace && "
             "git init -q && git add -A && "
             "git -c user.name=ci-repair -c user.email=ci-repair@localhost "
-            "commit -qm baseline"
+            "commit -q --allow-empty -m baseline"
         )
         yield env
     finally:

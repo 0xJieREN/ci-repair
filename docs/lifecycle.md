@@ -151,7 +151,7 @@ branch workflows have minimal permissions and no sensitive secrets.
   propagation, expressions using `steps`/`needs`/`hashFiles`/`fromJSON`, non-Linux
   runners, multiple toolchains.
 - Repository-local policy files (a PR could edit its own rules); submodules,
-  LFS and full Git history in replay.
+  LFS; history after the failing commit is never kept in a replay image.
 - Automatic retries, run-level budgets across jobs beyond `repair.max_jobs`,
   distributed workers, App token minting, notifications.
 

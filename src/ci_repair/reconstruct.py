@@ -493,9 +493,11 @@ def translate_action(
             problems.block(f"{where}: submodules are not supported")
         if scalar(inputs.get("lfs", "false")) not in ("false", ""):
             problems.block(f"{where}: Git LFS is not supported")
-        if scalar(inputs.get("fetch-depth", "1")) != "1":
-            problems.review(f"{where}: full Git history is not reproduced")
-        return {"checkout": True}
+        depth = scalar(inputs.get("fetch-depth", "1"))
+        if not depth.isdigit():
+            problems.block(f"{where}: checkout fetch-depth must be static")
+            return {}
+        return {"checkout": {"fetch_depth": int(depth)}}
     if name in NOOP_ACTIONS:
         return {}
     tool = {
@@ -816,6 +818,7 @@ def reconstruct(
                 if checkout_seen:
                     problems.block(f"{where}: multiple checkouts are not supported")
                 checkout_seen = True
+                spec["checkout"] = {"repository": repository, **record}
             elif kind == "setup" or (kind == "shell" and index < failing_index):
                 setup.append(record)
             elif index == failing_index:
@@ -853,8 +856,11 @@ def reconstruct(
         setup=setup,
         regression=later,
     )
-    if Verdict(policy.data["sandbox"]["setup_network"]) is not Verdict.ALLOW and setup:
+    offline = Verdict(policy.data["sandbox"]["setup_network"]) is not Verdict.ALLOW
+    if offline and setup:
         problems.review("setup steps need network, which policy does not allow automatically")
+    if offline and spec.get("checkout", {}).get("fetch_depth") != 1:
+        problems.review("Git history beyond the failing commit needs setup network")
     return finish(spec, problems)
 
 
@@ -900,8 +906,8 @@ def translate_step(
             problems.block(f"action {step['uses']} after the failure")
             return []
         items = [("toolchain", action["toolchain"])] if "toolchain" in action else []
-        if action.get("checkout"):
-            items.append(("checkout", None))
+        if "checkout" in action:
+            items.append(("checkout", action["checkout"]))
         if "needs" in action:
             items.append(("needs", action["needs"]))
         shell, step_env = action.get("shell", "sh"), {**base_env, **step_env}
@@ -988,6 +994,11 @@ if [ -n "$missing" ]; then
     echo "replay image lacks:$missing" >&2; exit 90
   fi
 fi
+if command -v apt-get >/dev/null 2>&1 && [ "$(id -u)" = 0 ]; then
+  # Hosted runners answer yes to apt and ship package lists; slim images ship neither.
+  echo 'APT::Get::Assume-Yes "true";' > /etc/apt/apt.conf.d/90ci-repair-assume-yes
+  ls /var/lib/apt/lists/*_Packages >/dev/null 2>&1 || apt-get update -qq >/dev/null 2>&1 || true
+fi
 if ! command -v sudo >/dev/null 2>&1 && [ "$(id -u)" = 0 ]; then
   mkdir -p /usr/local/bin
   cat > /usr/local/bin/sudo <<'SUDO'
@@ -1008,17 +1019,47 @@ SUDO
 fi
 mkdir -p /workspace && tar -xf /tmp/source.tar -C /workspace && rm -f /tmp/source.tar
 """
+# Like actions/checkout: a Git repository at the failing commit with its origin history
+# (depth from the workflow), so setup steps such as `git fetch --unshallow`, `git describe`
+# or pre-commit behave as in CI. Without network or access it stays a local commit.
+CHECKOUT = """cd /workspace
+git init -q
+if [ -n "$CI_REPAIR_REPOSITORY" ] && git remote add origin "https://github.com/$CI_REPAIR_REPOSITORY" &&
+   git -c protocol.version=2 fetch -q --no-tags --no-recurse-submodules $CI_REPAIR_DEPTH \\
+     origin "$CI_REPAIR_SHA" 2>/dev/null; then
+  git checkout -q --force --detach "$CI_REPAIR_SHA" && echo fetched
+else
+  git remote remove origin 2>/dev/null || true
+  git add -A && git -c user.name=ci-repair -c user.email=ci-repair@localhost \\
+    -c commit.gpgsign=false commit -qm "$CI_REPAIR_SHA" && echo local
+fi
+"""
+# Setup may fetch more (e.g. `git fetch --unshallow`); only history the failing commit can
+# reach stays, so a replay never contains commits or tags that came after the failure.
+PRUNE_HISTORY = """cd /workspace
+git remote | while read -r remote; do git remote remove "$remote"; done
+git for-each-ref --format='%(refname)' | while read -r ref; do
+  git merge-base --is-ancestor "$ref" HEAD 2>/dev/null || git update-ref -d "$ref"
+done
+rm -f .git/FETCH_HEAD .git/ORIG_HEAD
+git reflog expire --expire=now --all && git gc -q --prune=now
+"""
 # Tools such as tox, nox and pre-commit install environments on first use. Replay is
-# offline, so the build runs the replay commands once with setup network and keeps only
-# what they cached; tracked files are restored from the snapshot in every workspace.
+# offline, so the build runs the replay commands once with setup network. Only tool
+# environments survive; other new top-level entries (reports, build output) are removed,
+# and every workspace restores tracked files from the snapshot.
 WARM_UP = """cd /workspace
-git init -q && git add -A && git -c user.name=ci-repair -c user.email=ci-repair@localhost \\
-  -c commit.gpgsign=false commit -qm warm-up >/dev/null
+before=$(ls -A | sort)
 {commands}
-rm -rf /workspace/.git
+comm -13 <(echo "$before") <(ls -A | sort) | while read -r entry; do
+  case "$entry" in
+    .tox|.nox|.venv|venv|.eggs|node_modules|*.egg-info) ;;
+    *) rm -rf -- "./$entry" ;;
+  esac
+done
 """
 # Bump when the build procedure changes, so older images are not reused as equivalent.
-BUILD_RECIPE = 2
+BUILD_RECIPE = 3
 PROBE = (
     "for t in python3 node go uv pnpm npm; do command -v $t >/dev/null 2>&1 && "
     'printf "%s=%s\\n" "$t" "$($t --version 2>&1 | head -n1)"; done; true'
@@ -1029,6 +1070,19 @@ def docker(
     args: list[str], *, timeout: int = 120, check: bool = True
 ) -> subprocess.CompletedProcess:
     return subprocess.run(["docker", *args], capture_output=True, timeout=timeout, check=check)
+
+
+def checkout(container: str, spec: dict, online: bool) -> tuple[subprocess.CompletedProcess, str]:
+    source = spec.get("checkout") or {}
+    depth = source.get("fetch_depth", 1)
+    env = {
+        "CI_REPAIR_REPOSITORY": source.get("repository", "") if online else "",
+        "CI_REPAIR_SHA": spec["source"]["commit"],
+        "CI_REPAIR_DEPTH": f"--depth={depth}" if depth else "",
+    }
+    args = [arg for k, v in env.items() for arg in ("-e", f"{k}={v}")]
+    result = docker(["exec", *args, container, "bash", "-c", CHECKOUT], timeout=900, check=False)
+    return result, result.stdout.decode().strip()
 
 
 def warm_up(container: str, spec: dict, output: Path, seconds: int, env_args: list) -> dict:
@@ -1121,7 +1175,7 @@ def build_environment(
                 "--security-opt=no-new-privileges",
                 "--memory=4g",
                 "--cpus=2",
-                "--pids-limit=512",
+                "--pids-limit=4096",  # test suites run here in setup and warm-up
                 "--entrypoint",
                 "",
                 base,
@@ -1139,6 +1193,9 @@ def build_environment(
         docker(["cp", str(archive), f"{container}:/tmp/source.tar"])
         result = docker(["exec", container, "sh", "-c", BOOTSTRAP], timeout=600, check=False)
         log = result.stdout + result.stderr
+        if result.returncode == 0:
+            result, provenance["checkout"] = checkout(container, spec, network != "none")
+            log += result.stderr
         if result.returncode == 0 and spec["setup"]:
             script = (
                 "set -e\ncd /workspace\n" + "\n".join(step_command(s) for s in spec["setup"]) + "\n"
@@ -1174,6 +1231,7 @@ def build_environment(
             return provenance
         if network != "none":
             provenance.update(warm_up(container, spec, output, seconds, env_args))
+        docker(["exec", container, "bash", "-c", PRUNE_HISTORY], timeout=600)
         tools = docker(["exec", container, "sh", "-c", PROBE], check=False).stdout.decode(
             errors="replace"
         )

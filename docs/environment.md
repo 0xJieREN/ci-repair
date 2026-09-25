@@ -52,19 +52,32 @@ and `GITHUB_REPOSITORY` are set.
 `build_environment` pulls the base (if absent) for the runner's platform, starts a
 disposable container without credentials, host mounts or Docker socket (network
 only if `sandbox.setup_network: ALLOW`), extracts the verified source snapshot
-into `/workspace`, installs missing `bash/git/timeout/tar` via apt/apk (and, for
-root images without one, a `sudo` passthrough, since hosted runners grant
-passwordless sudo), runs the setup steps under `budget.max_setup_seconds`, probes
+into `/workspace`, installs missing `bash/git/timeout/tar` via apt/apk, and makes
+the image behave like a hosted runner where that is cheap: apt answers yes and has
+package lists, and root images without one get a `sudo` passthrough. Like
+`actions/checkout`, `/workspace` then becomes a Git repository at the failing commit,
+fetched from GitHub with the workflow's `fetch-depth` (a local commit without
+network or access). It runs the setup steps under `budget.max_setup_seconds`, probes
 tool versions, and commits `ci-repair-env:<spec hash>-r<recipe>`. Setup-created
 files (virtualenvs, `node_modules`, editable installs) become part of the replay
 baseline, never of the patch.
 
 Tools such as tox, nox and pre-commit create their environments on first use,
 which needs network that replay does not have. With setup network, the build
-therefore **warms up**: it runs the failing and regression commands once, ignores
-their results, and keeps only what they created (tool environments, caches);
-`/workspace/.git` is removed and every replay workspace restores tracked files
-from the snapshot. The warm-up's return code, duration and log digest are recorded.
+therefore **warms up**: it runs the failing and regression commands once and ignores
+their results. Only tool environments survive (`.tox`, `.nox`, `.venv`, `venv`,
+`.eggs`, `node_modules`, `*.egg-info` at the top level, and caches outside the
+workspace); other new top-level entries such as reports or build output are removed,
+and every replay workspace restores tracked files from the snapshot. The warm-up's
+return code, duration and log digest are recorded.
+
+Finally the build drops remotes and every ref the failing commit cannot reach and
+prunes their objects. Setup steps like `git fetch --unshallow` keep working, but a
+replay never contains commits or tags created after the failure.
+
+An operator can attach setup to a specific Docker network and pass it extra
+environment (for example a package mirror); neither is committed to the image, and
+their digest is part of the tag.
 
 Recorded: spec SHA-256 (workflow hash, source SHA, job/matrix, base, all steps),
 base image ID and repo digests, actual platform, architecture mismatch, tool

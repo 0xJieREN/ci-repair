@@ -430,7 +430,7 @@ jobs:
         run: sudo sh -c 'echo ready > /tmp/prepared' && touch generated-by-setup
       - name: test
         run: |
-          mkdir -p .tool-env && touch .tool-env/created-on-first-use
+          mkdir -p .tox && touch .tox/created-on-first-use warm-up-report.xml
           test -f /tmp/prepared && python -c 'from src.app import value; assert value == 1'
       - name: regression
         run: python -c 'from src.app import value; assert isinstance(value, int)'
@@ -449,7 +449,9 @@ jobs:
     try:
         assert built["status"] == "BUILT", (out / "setup.log").read_text()
         assert built["setup_returncode"] == 0
-        # The warm-up ran the failing command once and kept what it created, without .git.
+        # No repository to fetch: /workspace is a local commit of the failing tree.
+        assert built["checkout"] == "local"
+        # The warm-up ran the failing command once and kept only its tool environment.
         assert built["warm_up_returncode"] == 0
         command(
             [
@@ -459,7 +461,9 @@ jobs:
                 built["image_id"],
                 "sh",
                 "-c",
-                "test -f /workspace/.tool-env/created-on-first-use && test ! -e /workspace/.git",
+                "test -f /workspace/.tox/created-on-first-use"
+                " && test ! -e /workspace/warm-up-report.xml"
+                f' && test "$(git -C /workspace log -1 --format=%s)" = {sha}',
             ]
         )
         assert build_environment(spec, out / "source.tar", out, Policy())["reused"] is True
@@ -536,3 +540,49 @@ jobs:
         assert b"MIRROR_URL" not in env
     finally:
         command(["docker", "image", "rm", "-f", built["tag"]])
+
+
+def test_checkout_depth_is_part_of_the_spec(tmp_path):
+    assert spec_for(tmp_path / "a")["checkout"] == {"repository": "o/r", "fetch_depth": 1}
+    full = WORKFLOW.replace(
+        "uses: actions/checkout@v4", "uses: actions/checkout@v4\n        with: {fetch-depth: 0}"
+    )
+    spec = spec_for(tmp_path / "b", full)
+    assert spec["checkout"]["fetch_depth"] == 0 and spec["status"] == SUPPORTED
+    offline = spec_for(tmp_path / "c", full, policy=Policy({"sandbox": {"setup_network": "DENY"}}))
+    assert any("Git history" in r for r in offline["review_reasons"])
+
+
+def test_pruned_history_keeps_the_past_but_not_later_commits(tmp_path):
+    from ci_repair.reconstruct import PRUNE_HISTORY
+
+    repo = tmp_path / "workspace"
+    repo.mkdir()
+    command(["git", "init", "-q", str(repo)])
+    (repo / "f").write_text("past\n")
+    commit(repo)
+    past = command(["git", "rev-parse", "HEAD"], cwd=repo).decode().strip()
+    command(["git", "tag", "v1"], cwd=repo)
+    (repo / "f").write_text("the fix\n")
+    commit(repo)
+    future = command(["git", "rev-parse", "HEAD"], cwd=repo).decode().strip()
+    command(["git", "tag", "v2"], cwd=repo)
+    command(["git", "remote", "add", "origin", "https://example.invalid/r"], cwd=repo)
+    command(["git", "checkout", "-q", "--detach", past], cwd=repo)
+    script = PRUNE_HISTORY.replace("cd /workspace", f"cd {repo}")
+    subprocess.run(["bash", "-c", script], check=True, capture_output=True)
+    assert command(["git", "tag"], cwd=repo).decode().split() == ["v1"]
+    assert command(["git", "remote"], cwd=repo) == b""
+    missing = subprocess.run(["git", "cat-file", "-e", future], cwd=repo, capture_output=True)
+    assert missing.returncode != 0
+
+
+def test_warm_up_keeps_only_tool_environments(tmp_path):
+    from ci_repair.reconstruct import WARM_UP
+
+    (tmp_path / "setup-created").write_text("kept\n")
+    script = WARM_UP.format(commands="mkdir .tox .cov && touch report.xml pkg.egg-info").replace(
+        "cd /workspace", f"cd {tmp_path}"
+    )
+    subprocess.run(["bash", "-c", script], check=True)
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".tox", "pkg.egg-info", "setup-created"]
