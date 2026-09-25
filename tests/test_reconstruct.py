@@ -466,6 +466,26 @@ jobs:
                 f' && test "$(git -C /workspace log -1 --format=%s)" = {sha}',
             ]
         )
+        # Build requirements were downloaded while online and install without network.
+        assert built["wheelhouse_files"] > 0
+        command(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network=none",
+                built["image_id"],
+                "python",
+                "-m",
+                "pip",
+                "install",
+                "-q",
+                "--no-deps",
+                "--target",
+                "/tmp/offline",
+                "wheel",
+            ]
+        )
         assert build_environment(spec, out / "source.tar", out, Policy())["reused"] is True
         failing, regression = replay_commands(spec)
         (tmp_path / "log").write_text("AssertionError")
@@ -586,3 +606,19 @@ def test_warm_up_keeps_only_tool_environments(tmp_path):
     )
     subprocess.run(["bash", "-c", script], check=True)
     assert sorted(p.name for p in tmp_path.iterdir()) == [".tox", "pkg.egg-info", "setup-created"]
+
+
+def test_build_requirements_come_from_pyproject_as_data(tmp_path):
+    from ci_repair.reconstruct import DEFAULT_BUILD_REQUIRES
+
+    assert spec_for(tmp_path / "a")["build_requires"] == sorted(DEFAULT_BUILD_REQUIRES)
+    pyproject = (
+        '[build-system]\nrequires = ["hatchling>=1.0", "--index-url=http://evil", '
+        '"hatch-fancy-pypi-readme"]\nbuild-backend = "hatchling.build"\n'
+    )
+    spec = spec_for(tmp_path / "b", extra={"pyproject.toml": pyproject})
+    assert spec["build_requires"] == sorted(
+        ["hatchling>=1.0", "hatch-fancy-pypi-readme", *DEFAULT_BUILD_REQUIRES]
+    )
+    broken = spec_for(tmp_path / "c", extra={"pyproject.toml": "[build-system\n"})
+    assert broken["build_requires"] == sorted(DEFAULT_BUILD_REQUIRES)

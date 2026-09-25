@@ -71,6 +71,13 @@ workspace); other new top-level entries such as reports or build output are remo
 and every replay workspace restores tracked files from the snapshot. The warm-up's
 return code, duration and log digest are recorded.
 
+Steps that build the project offline (tox packaging, `pip install .`, `python -m
+build`) first install its PEP 517 build requirements. The build reads them from
+`pyproject.toml` at the failing commit (plus setuptools and wheel, pip's defaults),
+downloads them with setup network into `/opt/ci-repair/wheelhouse` at the versions
+the setup index serves, and configures pip and uv in the image to install from that
+wheelhouse without an index. Replay has no index to reach anyway.
+
 Finally the build drops remotes and every ref the failing commit cannot reach and
 prunes their objects. Setup steps like `git fetch --unshallow` keep working, but a
 replay never contains commits or tags created after the failure.

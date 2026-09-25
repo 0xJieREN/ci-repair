@@ -15,6 +15,7 @@ import re
 import shlex
 import subprocess
 import time
+import tomllib
 from pathlib import Path
 
 import yaml
@@ -855,6 +856,7 @@ def reconstruct(
         platform=f"linux/{'arm64' if runner[1] == 'arm64' else 'amd64'}",
         setup=setup,
         regression=later,
+        build_requires=read_build_requires(repo, sha),
     )
     offline = Verdict(policy.data["sandbox"]["setup_network"]) is not Verdict.ALLOW
     if offline and setup:
@@ -971,6 +973,28 @@ def finish(spec: dict, problems: Problems) -> dict:
     return spec
 
 
+# pip's build isolation installs these when a project declares no build system.
+DEFAULT_BUILD_REQUIRES = ["setuptools>=40.8.0", "wheel"]
+
+
+def read_build_requires(repo: Path, sha: str) -> list[str]:
+    """PEP 517 build requirements at the failing commit (untrusted data, never a command)."""
+    result = subprocess.run(
+        ["git", "show", f"{sha}:pyproject.toml"], cwd=repo, capture_output=True, timeout=30
+    )
+    declared = []
+    if result.returncode == 0 and len(result.stdout) < 262144:
+        try:
+            system = tomllib.loads(result.stdout.decode()).get("build-system", {})
+            declared = system.get("requires", []) if isinstance(system, dict) else []
+        except (tomllib.TOMLDecodeError, UnicodeDecodeError):
+            declared = []
+    requires = [r.strip() for r in declared if isinstance(r, str)]
+    # Requirement lines only: options such as --index-url are dropped.
+    requires = [r for r in requires if r and not r.startswith("-") and "\n" not in r]
+    return sorted(set(requires + DEFAULT_BUILD_REQUIRES))[:50]
+
+
 def read_version_files(repo: Path, sha: str) -> dict:
     files = {}
     for path in (".python-version", ".nvmrc", ".node-version", "go.mod"):
@@ -1058,8 +1082,20 @@ comm -13 <(echo "$before") <(ls -A | sort) | while read -r entry; do
   esac
 done
 """
+# Replays are offline, but steps that build the project (tox packaging, `pip install .`,
+# `python -m build`) install its PEP 517 build requirements first. With setup network the
+# build downloads them, at the versions the setup index serves, into a local wheelhouse
+# that pip and uv use instead of an index during replay.
+WHEELHOUSE = """dir=/opt/ci-repair/wheelhouse
+command -v python3 >/dev/null 2>&1 && python3 -m pip --version >/dev/null 2>&1 || exit 0
+mkdir -p "$dir"
+python3 -m pip download -q --dest "$dir" -r /tmp/ci-repair-build-requires.txt || exit 0
+printf '[global]\\nfind-links = %s\\nno-index = true\\n' "$dir" > /etc/pip.conf
+mkdir -p /etc/uv && printf 'find-links = ["%s"]\\nno-index = true\\n' "$dir" > /etc/uv/uv.toml
+ls "$dir" | wc -l
+"""
 # Bump when the build procedure changes, so older images are not reused as equivalent.
-BUILD_RECIPE = 3
+BUILD_RECIPE = 4
 PROBE = (
     "for t in python3 node go uv pnpm npm; do command -v $t >/dev/null 2>&1 && "
     'printf "%s=%s\\n" "$t" "$($t --version 2>&1 | head -n1)"; done; true'
@@ -1083,6 +1119,18 @@ def checkout(container: str, spec: dict, online: bool) -> tuple[subprocess.Compl
     args = [arg for k, v in env.items() for arg in ("-e", f"{k}={v}")]
     result = docker(["exec", *args, container, "bash", "-c", CHECKOUT], timeout=900, check=False)
     return result, result.stdout.decode().strip()
+
+
+def wheelhouse(container: str, spec: dict, output: Path, env_args: list) -> int | None:
+    """Download build requirements for offline replay; None when pip is unavailable."""
+    requires = output / "build-requires.txt"
+    requires.write_text("\n".join(spec.get("build_requires", DEFAULT_BUILD_REQUIRES)) + "\n")
+    docker(["cp", str(requires), f"{container}:/tmp/ci-repair-build-requires.txt"])
+    result = docker(
+        ["exec", *env_args, container, "bash", "-c", WHEELHOUSE], timeout=900, check=False
+    )
+    count = result.stdout.decode().strip()
+    return int(count) if count.isdigit() else None
 
 
 def warm_up(container: str, spec: dict, output: Path, seconds: int, env_args: list) -> dict:
@@ -1231,6 +1279,7 @@ def build_environment(
             return provenance
         if network != "none":
             provenance.update(warm_up(container, spec, output, seconds, env_args))
+            provenance["wheelhouse_files"] = wheelhouse(container, spec, output, env_args)
         docker(["exec", container, "bash", "-c", PRUNE_HISTORY], timeout=600)
         tools = docker(["exec", container, "sh", "-c", PROBE], check=False).stdout.decode(
             errors="replace"
