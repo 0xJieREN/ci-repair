@@ -1031,7 +1031,7 @@ def docker(
     return subprocess.run(["docker", *args], capture_output=True, timeout=timeout, check=check)
 
 
-def warm_up(container: str, spec: dict, output: Path, seconds: int) -> dict:
+def warm_up(container: str, spec: dict, output: Path, seconds: int, env_args: list) -> dict:
     """Run the replay commands once with network; failures are expected and ignored."""
     steps = [spec["failing"], *spec["regression"]]
     commands = "\n".join(f"{step_command(s)} || true" for s in steps)
@@ -1041,6 +1041,7 @@ def warm_up(container: str, spec: dict, output: Path, seconds: int) -> dict:
     result = docker(
         [
             "exec",
+            *env_args,
             "-w",
             "/workspace",
             container,
@@ -1061,15 +1062,29 @@ def warm_up(container: str, spec: dict, output: Path, seconds: int) -> dict:
     }
 
 
-def build_environment(spec: dict, archive: Path, output: Path, policy: Policy) -> dict:
+def build_environment(
+    spec: dict,
+    archive: Path,
+    output: Path,
+    policy: Policy,
+    *,
+    network: str | None = None,
+    setup_env: dict | None = None,
+) -> dict:
     """Run allowlisted setup once in a disposable container and commit the replay image.
 
     Setup is the only phase that may use the network (policy sandbox.setup_network); it
     receives no credentials or host mounts. Repair and verification later run offline.
+    An operator may attach setup to a specific Docker network and give setup and warm-up
+    extra environment (for example a package mirror); neither is committed to the image.
     """
     if spec["status"] == UNSUPPORTED:
         raise ValueError("Cannot build an unsupported environment")
     tag = f"ci-repair-env:{spec['spec_sha256'][:16]}-r{BUILD_RECIPE}"
+    if network or setup_env:
+        variant = json.dumps([network, setup_env or {}], sort_keys=True).encode()
+        tag += f"-s{hashlib.sha256(variant).hexdigest()[:8]}"
+    env_args = [arg for k, v in sorted((setup_env or {}).items()) for arg in ("-e", f"{k}={v}")]
     provenance = {"tag": tag, "spec_sha256": spec["spec_sha256"], "base_image": spec["base_image"]}
     existing = docker(["image", "inspect", "--format={{.Id}}", tag], check=False)
     if existing.returncode == 0:
@@ -1094,7 +1109,8 @@ def build_environment(spec: dict, archive: Path, output: Path, policy: Policy) -
     )
     if arch != spec["runner"]["arch"]:
         provenance["architecture_mismatch"] = {"runner": spec["runner"]["arch"], "replay": arch}
-    network = "bridge" if policy.data["sandbox"]["setup_network"] == "ALLOW" else "none"
+    allowed = policy.data["sandbox"]["setup_network"] == "ALLOW"
+    network = (network or "bridge") if allowed else "none"
     seconds = int(policy.data["budget"]["max_setup_seconds"])
     container = (
         docker(
@@ -1132,6 +1148,7 @@ def build_environment(spec: dict, archive: Path, output: Path, policy: Policy) -
             result = docker(
                 [
                     "exec",
+                    *env_args,
                     "-w",
                     "/workspace",
                     container,
@@ -1150,12 +1167,13 @@ def build_environment(spec: dict, archive: Path, output: Path, policy: Policy) -
             setup_seconds=time.monotonic() - started,
             setup_log_sha256=hashlib.sha256(log).hexdigest(),
             setup_network=network,
+            setup_env_keys=sorted(setup_env or {}),
         )
         if result.returncode != 0:
             provenance["status"] = "SETUP_FAILED"
             return provenance
         if network != "none":
-            provenance.update(warm_up(container, spec, output, seconds))
+            provenance.update(warm_up(container, spec, output, seconds, env_args))
         tools = docker(["exec", container, "sh", "-c", PROBE], check=False).stdout.decode(
             errors="replace"
         )

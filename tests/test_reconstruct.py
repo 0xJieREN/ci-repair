@@ -494,3 +494,45 @@ def test_custom_shell_template_keeps_its_flags(tmp_path):
     result = subprocess.run(["bash", "-c", step_command(step)], cwd=tmp_path, capture_output=True)
     assert result.returncode != 0 and b"+ false" in result.stderr
     assert not (tmp_path / "not-reached").exists()
+
+
+@pytest.mark.docker
+@pytest.mark.skipif(
+    __import__("os").getenv("CI_REPAIR_DOCKER_TESTS") != "1", reason="Docker opt-in required"
+)
+def test_setup_env_reaches_setup_but_not_the_image(tmp_path):
+    from ci_repair.reconstruct import build_environment
+    from ci_repair.workspace import snapshot
+
+    workflow = """on: push
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    container: ci-repair-demo:local
+    steps:
+      - uses: actions/checkout@v4
+      - name: prepare
+        run: echo "$MIRROR_URL" > mirror-seen
+      - name: test
+        run: 'false'
+"""
+    repo, sha = repo_with(tmp_path, workflow)
+    spec = reconstruct(repo, sha, ".github/workflows/ci.yml", job("unit", "test"), "", Policy())
+    out = tmp_path / "env"
+    out.mkdir()
+    snapshot(repo, out / "source.tar")
+    built = build_environment(
+        spec, out / "source.tar", out, Policy(), setup_env={"MIRROR_URL": "http://mirror"}
+    )
+    try:
+        assert built["status"] == "BUILT", (out / "setup.log").read_text()
+        assert built["tag"].rsplit("-", 1)[1].startswith("s")  # never reused by plain builds
+        assert built["setup_env_keys"] == ["MIRROR_URL"]
+        seen = command(
+            ["docker", "run", "--rm", built["image_id"], "cat", "/workspace/mirror-seen"]
+        )
+        assert seen.decode().strip() == "http://mirror"
+        env = command(["docker", "image", "inspect", "--format={{json .Config.Env}}", built["tag"]])
+        assert b"MIRROR_URL" not in env
+    finally:
+        command(["docker", "image", "rm", "-f", built["tag"]])
