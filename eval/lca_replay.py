@@ -18,6 +18,7 @@ import collections
 import json
 import re
 import subprocess
+import urllib.parse
 from pathlib import Path
 
 from lca_coverage import dataset, job_specs, task_status
@@ -47,7 +48,14 @@ def mirror_env(row: dict, mirror: str | None) -> dict:
         return {}
     found = MIRROR_DATE.search(row["workflow"])
     date = found[1] if found else row["commit_date"][:10]
-    return {"PIP_INDEX_URL": f"{mirror}/{date}", "UV_INDEX_URL": f"{mirror}/{date}"}
+    host = urllib.parse.urlsplit(mirror).hostname
+    return {
+        "PIP_INDEX_URL": f"{mirror}/{date}",
+        "UV_INDEX_URL": f"{mirror}/{date}",
+        # pip trusts plain HTTP only on localhost, which the official workflows use.
+        "PIP_TRUSTED_HOST": host,
+        "UV_INSECURE_HOST": host,
+    }
 
 
 def replay_job(entry, archive, reference, directory, policy, network, setup_env) -> dict:
