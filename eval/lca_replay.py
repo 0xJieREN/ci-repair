@@ -110,7 +110,7 @@ def replay_job(entry, archive, reference, directory, policy, network, setup_env)
 
 
 def replay(row: dict, output: Path, network: str | None, mirror: str | None) -> dict:
-    directory = output / "tasks" / str(row["id"])
+    directory = (output / "tasks" / str(row["id"])).resolve()
     directory.mkdir(parents=True, exist_ok=False)
     record = {
         "id": row["id"],
