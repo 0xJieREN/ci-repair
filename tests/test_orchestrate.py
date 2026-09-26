@@ -5,7 +5,7 @@ import os
 import pytest
 from test_workspace import commit
 
-from ci_repair.orchestrate import order_jobs, repair_run, summarize
+from ci_repair.orchestrate import SIBLING_BUDGET, job_task, order_jobs, repair_run, summarize
 from ci_repair.policy import Policy
 from ci_repair.workspace import command
 
@@ -203,8 +203,64 @@ def test_multi_job_run_accumulates_one_verified_patch(tmp_path, unresolved_job):
         assert report["patch_sha256"] == hashlib.sha256(patch).hexdigest()
         assert "value = 0" in (root / "repo/src/app.py").read_text()  # input untouched
     finally:
-        for job in report["jobs"]:
-            if "environment" not in job:
-                continue
-            tag = f"ci-repair-env:{job['environment']['spec_sha256'][:16]}"
-            command(["docker", "image", "rm", "-f", tag])
+        remove_images(report)
+
+
+def remove_images(report):
+    for job in report["jobs"]:
+        image = (job.get("environment") or {}).get("image_id")
+        if image:
+            command(["docker", "image", "rm", "-f", image])
+
+
+def test_job_task_shares_sibling_failures_within_a_budget():
+    meta = {"job_name": "Core Test", "run_id": 7, "failed_steps": ["Run tests"]}
+    others = [
+        {"job_name": "Linter", "step": "flake8", "log": "x\nE501 error: line too long\n"},
+        {"job_name": "Docs", "step": "build", "log": "Error: " + "y" * 5000},
+    ]
+    task = job_task(meta, ["Build"], others)
+    assert "'Linter' (step: flake8)" in task and "E501 error: line too long" in task
+    assert "untrusted" in task and "Changes already committed for earlier jobs" in task
+    assert len(task) < SIBLING_BUDGET + 600
+    assert job_task(meta, []) == (
+        "GitHub Actions job 'Core Test' failed in run 7 (step: Run tests)."
+    )
+
+
+@pytest.mark.docker
+@pytest.mark.skipif(os.getenv("CI_REPAIR_DOCKER_TESTS") != "1", reason="Docker opt-in required")
+def test_a_job_broken_by_a_later_repair_gets_one_fix_up(tmp_path):
+    from test_docker import scripted_model
+
+    root = collection(tmp_path, jobs=(("lint", "check"), ("other", "test")))
+    models = [
+        scripted_model("sed -i 's/value = 0/value = 1/' src/app.py"),  # lint
+        # other: fixes its own check but breaks lint's.
+        scripted_model(
+            "sed -i 's/flag = False/flag = True/' src/other.py && "
+            "sed -i 's/value = 1/value = 2/' src/app.py"
+        ),
+        scripted_model("sed -i 's/value = 2/value = 1/' src/app.py"),  # lint fix-up
+    ]
+    started = []
+
+    def factory():
+        started.append(True)
+        return models[len(started) - 1]
+
+    output = tmp_path / "out"
+    policy = Policy({"repositories": [{"name": "owner/repo", "allowed_paths": ["src/"]}]})
+    report = repair_run(root, output, model_factory=factory, policy=policy)
+    try:
+        jobs = {j["job_name"]: j for j in report["jobs"]}
+        assert report["status"] == "PASS", report
+        assert len(started) == 3
+        assert jobs["lint"]["fixup"]["verified"] and jobs["lint"]["status"] == "REPAIRED"
+        assert all(j["final_verification"] == "PASS" for j in jobs.values())
+        assert len(report["tests"]) == 4
+        # The fix-up saw lint's current failure, not the original CI log.
+        assert "AssertionError" in (output / "jobs/1/fixup-failure.log").read_text()
+        assert "value = 1" in (output / "candidate/src/app.py").read_text()
+    finally:
+        remove_images(report)

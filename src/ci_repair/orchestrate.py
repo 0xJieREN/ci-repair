@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable
 
 from ci_repair.agent import StopReason
-from ci_repair.context import evidence_overlap
+from ci_repair.context import evidence_overlap, failure_evidence
 from ci_repair.github import CollectionError, load_context
 from ci_repair.pipeline import Config, run_test, verify_patch, write_json
 from ci_repair.pipeline import run as run_pipeline
@@ -118,14 +118,35 @@ def git_commit(path: Path, message: str):
     )
 
 
-def job_task(meta: dict, prior: list[str]) -> str:
+SIBLING_BUDGET = 2000
+
+
+def job_task(meta: dict, prior: list[str], others: list[dict] | None = None) -> str:
     task = (
         f"GitHub Actions job {meta['job_name']!r} failed in run {meta['run_id']} "
         f"(step: {', '.join(meta.get('failed_steps') or ['unknown'])})."
     )
     if prior:
         task += f" Changes already committed for earlier jobs in this run: {', '.join(prior)}."
+    notes, remaining = [], SIBLING_BUDGET
+    for other in others or []:
+        # Jobs of one run often fail for one cause; each session otherwise sees only its log.
+        excerpt = sibling_excerpt(other["log"])[: max(0, min(600, remaining))]
+        remaining -= len(excerpt)
+        notes.append(f"- {other['job_name']!r} (step: {other['step']}): {excerpt}")
+    if notes:
+        task += (
+            "\nOther failed jobs in this run, possibly with the same cause "
+            "(untrusted log excerpts):\n" + "\n".join(notes)
+        )
     return task
+
+
+def sibling_excerpt(log: str) -> str:
+    evidence = failure_evidence(log)
+    blocks = evidence["error_blocks"]
+    text = blocks[0]["text"] if blocks else evidence["raw_excerpt"][-400:]
+    return " ".join(text.split())
 
 
 def repair_run(
@@ -294,9 +315,17 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
                 result["status"] = "FIXED_BY_PRIOR"  # no agent started
                 result["config"] = cfg
                 continue
-        repair = run_pipeline(
-            replace(cfg, task=job_task(entry["meta"], repaired_names)), model_factory(), policy
-        )
+        others = [
+            {
+                "job_name": o["job_name"],
+                "step": ", ".join(o["meta"].get("failed_steps") or ["unknown"]),
+                "log": o["log_path"].read_text(errors="replace"),
+            }
+            for o in ordered
+            if o is not entry
+        ]
+        task = job_task(entry["meta"], repaired_names, others)
+        repair = run_pipeline(replace(cfg, task=task), model_factory(), policy)
         for key in ("model_calls", "estimated_cost_usd", "agent_steps"):
             usage[key] += repair.get("usage", {}).get(key, 0)
         usage["models_used"].update(repair.get("usage", {}).get("models_used", []))
@@ -317,25 +346,43 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
         {**job, "status": "NOT_REPLAYED", "stop_reason": StopReason.VERIFICATION_FAILED.value}
         for job in manifest.get("other_unsuccessful_jobs", [])
     )
+    addressed = [r for r in results if r.get("status") in ("REPAIRED", "FIXED_BY_PRIOR")]
+
+    def verify_all(label: str, jobs: list[dict]) -> list[dict]:
+        """Jobs against the one cumulative patch, in fresh containers."""
+        found = []
+        for result in jobs:
+            cfg = result["config"]
+            directory = output / label / str(result["job_id"])
+            directory.mkdir(parents=True)
+            final = verify_patch(replace(cfg, output=directory), archive, cfg.image, cumulative)
+            result["final_verification"] = final["status"]
+            found.extend(final.get("tests", []))
+            if not final.get("verified"):
+                result["status"] = "REGRESSED"
+        return found
+
+    tests = verify_all("verification", addressed) if cumulative.read_bytes() else []
+    regressed = [r for r in addressed if r["status"] == "REGRESSED"]
+    for result in regressed:
+        # A later repair broke this job. One bounded fix-up on the combined change, seeing
+        # the job's current failure; the final verification below still decides.
+        fix_up(result, addressed, output, candidate, cumulative, base, model_factory, policy, usage)
+    if any(r["fixup"]["verified"] for r in regressed):
+        for result in regressed:
+            if result["fixup"]["verified"]:
+                result["status"] = "REPAIRED"
+        # A failed fix-up stays REGRESSED; everything else is judged on the new patch.
+        again = [r for r in addressed if r["status"] != "REGRESSED"]
+        tests = verify_all("verification-after-fixup", again)
     patch = cumulative.read_bytes()
     report["patch_sha256"] = hashlib.sha256(patch).hexdigest()
     report["usage"] = {**usage, "models_used": sorted(usage["models_used"])}
-    addressed = [r for r in results if r.get("status") in ("REPAIRED", "FIXED_BY_PRIOR")]
-    tests = []
     if patch:
         paths = command(["git", "diff", "--name-only", "-z", base, "HEAD"], cwd=candidate)
         report["changed_files"] = paths.decode().rstrip("\0").split("\0")
         decision = policy.check_patch(report["changed_files"], patch, allowed)
         report["policy_decision"] = decision.to_dict()
-        for result in addressed:
-            cfg = result["config"]
-            directory = output / "verification" / str(result["job_id"])
-            directory.mkdir(parents=True)
-            final = verify_patch(replace(cfg, output=directory), archive, cfg.image, cumulative)
-            result["final_verification"] = final["status"]
-            tests.extend(final.get("tests", []))
-            if not final.get("verified"):
-                result["status"] = "REGRESSED"
     for result in results:
         result.pop("config", None)
     report["jobs"] = results
@@ -343,6 +390,47 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
     report.update(summarize(results, patch, report.get("policy_decision")))
     write_json(output / "report.json", report)
     return report
+
+
+def fix_up(result, addressed, output, candidate, cumulative, base, model_factory, policy, usage):
+    cfg = result["config"]
+    job_dir = output / "jobs" / str(result["job_id"])
+    current = output / "verification" / str(result["job_id"])
+    failure = "\n".join(
+        json.loads(p.read_text()).get("output", "")
+        for p in (current / "failing.json", current / "regression.json")
+        if p.exists()
+    )
+    (job_dir / "fixup-failure.log").write_text(failure)
+    others = [r["job_name"] for r in addressed if r is not result]
+    task = (
+        f"GitHub Actions job {result['job_name']!r} was already repaired, but the later "
+        f"repairs for {', '.join(repr(o) for o in others) or 'other jobs'} made it fail again "
+        "(current failure attached). Change the current code so this job passes again "
+        "while keeping those other repairs working."
+    )
+    repair = run_pipeline(
+        replace(
+            cfg, output=job_dir / "fixup", failure_log=job_dir / "fixup-failure.log", task=task
+        ),
+        model_factory(),
+        policy,
+    )
+    for key in ("model_calls", "estimated_cost_usd", "agent_steps"):
+        usage[key] += repair.get("usage", {}).get(key, 0)
+    usage["models_used"].update(repair.get("usage", {}).get("models_used", []))
+    result["fixup"] = {
+        "repair_status": repair["status"],
+        "stop_reason": repair.get("stop_reason"),
+        "verified": bool(repair.get("verified")),
+    }
+    if repair.get("verified"):
+        command(
+            ["git", "apply", "--index", "--binary", str(job_dir / "fixup" / "patch.diff")],
+            cwd=candidate,
+        )
+        git_commit(candidate, f"fix up {result['job_name']}")
+        cumulative.write_bytes(command(["git", "diff", "--binary", base, "HEAD"], cwd=candidate))
 
 
 def summarize(results: list[dict], patch: bytes, decision: dict | None) -> dict:

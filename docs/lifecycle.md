@@ -95,9 +95,14 @@ first, then workflow position, job name and job ID. For each job:
 reconstruct → build → baseline on the **original** source → if the cumulative
 patch already passes this job's checks, mark `FIXED_BY_PRIOR` (no agent) →
 otherwise repair on a candidate repository that contains earlier repairs →
-commit. Finally every `REPAIRED`/`FIXED_BY_PRIOR` job is re-verified with the one
-cumulative patch against the original snapshot; a job broken by a later patch
-becomes `REGRESSED` and the run fails. Run status: `PASS` (every failed job
+commit. Each job's task also lists the other failed jobs of the run with the first
+error block of their logs (bounded, marked untrusted), because jobs of one run
+often share a cause. Finally every `REPAIRED`/`FIXED_BY_PRIOR` job is re-verified
+with the one cumulative patch against the original snapshot. A job broken by a
+later repair becomes `REGRESSED` and gets **one** fix-up attempt on the combined
+change, with its current failure as the log. Only if a fix-up verifies are the jobs
+verified again; a job that is still broken keeps `REGRESSED` and the run fails.
+Run status: `PASS` (every failed job
 verified), `PARTIAL`, `FAIL`, `UNSUPPORTED_ENVIRONMENT`, `PATCH_REJECTED`,
 `ERROR`. Only `PASS` is publishable, as one draft PR.
 
