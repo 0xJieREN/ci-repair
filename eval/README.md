@@ -109,6 +109,34 @@ uv run --with pyarrow python eval/compare.py --output runs/compare --env-file .e
 uv run --with pyarrow python eval/compare.py --output runs/compare --summarize
 ```
 
+### Round 1: all 39 usable tasks, 3 repetitions (2026-09-25)
+
+Hosted run [36149891145](https://github.com/0xJieREN/ci-repair/actions/runs/36149891145),
+commit `8cd5bce`, mini-swe-agent 2.4.6, Pi 0.87.1; 234 trials, no infrastructure errors.
+
+| | CI Repair | Pi |
+|---|---:|---:|
+| Trials passed | 107/117 (91.5%) | 113/117 (96.6%) |
+| Difficulty 0 / 1 / 2 / 3 | 75/75, 10/12, 22/27, 0/3 | 75/75, 12/12, 26/27, 0/3 |
+| Model calls, median (mean) | 5 (9.2) | 8 (11.0) |
+| Estimated cost, mean per trial | $0.0069 | $0.0078 |
+| Agent time, median | 60 s | 25 s |
+
+- Only three tasks differ, all in Pi's favor: 45 (CI Repair 2/3), 53 (1/3), 57 (0/3).
+  The mean per-task difference is −5.1 points. The 95% bootstrap interval, clustered
+  by repository, is [−13.1, 0.0], so the difference is borderline.
+- CI Repair's own verdict matched the external grader in all 117 trials (107 PASS,
+  10 FAIL), so it never claimed an unverified fix.
+- CI Repair made fewer calls and cost less. Its time includes its own baseline,
+  probes and final verification, which Pi does not run.
+- The differences come from multi-job tasks. On 57, repairing pyupgrade after black
+  changed code that black then rejected. The final verification caught the
+  regression, but nothing repaired it. On 53, two jobs share one cause, and each
+  single-job session saw only its own log. 45 needed 26–30 calls per attempt, at
+  the budget limit.
+- Most tasks are easy for both agents. Difficulty 0 accounts for 75 of each arm's
+  117 trials, so this set separates the agents only on the few harder tasks.
+
 ## Pi tool routing
 
 `pi/docker-tools.ts` lets the [Pi](https://github.com/earendil-works/pi) coding

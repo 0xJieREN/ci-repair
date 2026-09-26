@@ -392,14 +392,14 @@ def trial(prep: dict, arm: str, repetition: int, directory: Path, build) -> dict
     return result
 
 
-def run_task(row, output: Path, repetitions: int, build, keep_images: bool):
+def run_task(row, output: Path, repetitions: int, build, keep_images: bool, arms=ARMS):
     directory = output / "tasks" / str(row["id"])
     directory.mkdir(parents=True, exist_ok=True)
     prep = prepare(row, directory, build)
     for repetition in range(1, repetitions + 1):
         # Alternate which arm goes first to spread provider cache and load effects.
-        arms = ARMS if (repetition + row["id"]) % 2 else tuple(reversed(ARMS))
-        for arm in arms:
+        order = ARMS if (repetition + row["id"]) % 2 else tuple(reversed(ARMS))
+        for arm in (a for a in order if a in arms):
             result = trial(prep, arm, repetition, directory, build)
             print(
                 json.dumps({k: result.get(k) for k in ("id", "arm", "repetition", "passed")}),
@@ -489,6 +489,7 @@ def main():
     parser.add_argument("--network", help="Setup network, e.g. container:pypi-wayback")
     parser.add_argument("--mirror", help="PyPI wayback base URL, e.g. http://localhost:8080")
     parser.add_argument("--keep-images", action="store_true")
+    parser.add_argument("--arms", default=",".join(ARMS), help="Comma-separated subset of arms")
     args = parser.parse_args()
     args.output = args.output.resolve()  # git runs inside checkouts; paths must be absolute
     if args.summarize:
@@ -518,7 +519,8 @@ def main():
     for task_id in ids:
         row = rows[task_id]
         try:
-            run_task(row, args.output, args.repetitions, build, args.keep_images)
+            arms = tuple(a for a in args.arms.split(",") if a in ARMS)
+            run_task(row, args.output, args.repetitions, build, args.keep_images, arms)
         except Exception as exc:  # noqa: BLE001 - keep going; the task is reported as an error
             write_json(
                 args.output / "tasks" / str(task_id) / "error.json",

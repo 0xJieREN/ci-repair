@@ -11,6 +11,10 @@ on:
         description: Repetitions per task and arm
         required: true
         default: '3'
+      arms:
+        description: Arms to run (ci-repair, pi or both)
+        required: true
+        default: 'ci-repair,pi'
 permissions:
   contents: read
 env:
@@ -66,10 +70,11 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           LITELLM_MODEL_REGISTRY_PATH: config/deepseek-pricing.json
           REPETITIONS: ${{ inputs.repetitions }}
+          ARMS: ${{ inputs.arms }}
         run: |
           uv run --with pyarrow python eval/compare.py --output runs/compare \
             --network container:pypi-wayback --mirror http://localhost:8080 \
-            --tasks ${{ matrix.task }} --repetitions "$REPETITIONS"
+            --tasks ${{ matrix.task }} --repetitions "$REPETITIONS" --arms "$ARMS"
       - name: Keep results, patches and agent logs
         if: always()
         uses: actions/upload-artifact@v4
