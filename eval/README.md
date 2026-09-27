@@ -137,6 +137,37 @@ commit `8cd5bce`, mini-swe-agent 2.4.6, Pi 0.87.1; 234 trials, no infrastructure
 - Most tasks are easy for both agents. Difficulty 0 accounts for 75 of each arm's
   117 trials, so this set separates the agents only on the few harder tasks.
 
+### Round 2: multi-job tasks after `e64f527`, 3 repetitions (2026-09-26)
+
+Hosted run [36246418676](https://github.com/0xJieREN/ci-repair/actions/runs/36246418676),
+commit `38c7769` (includes `e64f527`: sibling failure excerpts in each job's task,
+and one fix-up repair for jobs broken by a later repair). CI Repair only, on the 7
+multi-job tasks (26, 29, 53, 57, 60, 96, 142). Pi's code is unchanged, so its round 1
+trials serve as the comparison. 21 trials, no infrastructure errors.
+
+| Task | CI Repair round 1 | CI Repair round 2 | Pi round 1 |
+|---:|---:|---:|---:|
+| 53 | 1/3 | 2/3 | 3/3 |
+| 57 | 0/3 | 3/3 | 3/3 |
+| 26, 29, 60, 96, 142 | 15/15 | 15/15 | 15/15 |
+| **Total** | 16/21 | 20/21 | 21/21 |
+| Model calls, median (mean) | 12 (15.9) | 11 (14.0) | 14 (18.6) |
+| Estimated cost, mean per trial | $0.0132 | $0.0098 | $0.0149 |
+
+- 57: every trial repaired black and pyupgrade, final verification found that the
+  pyupgrade change broke black, and one fix-up of black passed. All 3 trials passed,
+  at 11–16 calls.
+- 53: in both passing trials, repairing Core Test also fixed Linter
+  (`FIXED_BY_PRIOR`). The failing trial had the sibling excerpt too, but both
+  sessions used all 30 calls trying to recover the deleted `elevensports` and
+  `ellentube` modules instead of removing their stale imports. This is agent
+  variance, not an orchestration gap.
+- The other five tasks stayed at 15/15 with similar calls, so the sibling excerpt
+  did not hurt them. The verdict again matched the grader in all 21 trials.
+- Combining round 2 with round 1 for the 32 unchanged tasks gives CI Repair about
+  111/117 against Pi's 113/117. The remaining gap is 45 (2/3, budget-bound) and
+  53 (2/3). This mixes two commits, so it is an estimate, not a fresh full run.
+
 ## Pi tool routing
 
 `pi/docker-tools.ts` lets the [Pi](https://github.com/earendil-works/pi) coding
