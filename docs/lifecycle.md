@@ -1,6 +1,6 @@
-# Repair lifecycle (v0.4)
+# Repair lifecycle
 
-This is the entry point for the automatic system. Details live in
+This is the entry point for the automatic system introduced in v0.4. Details live in
 [policy](policy.md), [environment reconstruction](environment.md) and
 [PR publication](pull-requests.md). The earlier manual paths (`ci-repair`,
 `ci-repair-plan`, `ci-repair-pr prepare/publish`) still work unchanged.
@@ -22,7 +22,7 @@ CI failure (workflow_run completed/failure)
 
 ## How the existing architecture was extended
 
-Before this version the pipeline was: operator inputs → `snapshot` → baseline
+Before v0.4 the pipeline was: operator inputs → `snapshot` → baseline
 in a fresh container → one `DefaultAgent` run → `extract_patch` →
 `verify_patch` in fresh containers → local report; `github.collect` imported one
 job; `plan` extracted one static step; `publish` made a creation-only draft PR

@@ -10,9 +10,10 @@ measurements live in [eval/README.md](eval/README.md) and
 
 - **Versions** follow [Semantic Versioning](https://semver.org/). While the major
   version is 0, any minor version may change interfaces. A version begins at the
-  commit that changed `version` in `pyproject.toml`; no Git tags exist yet, so each
-  entry names its commit range. Work after the last bump is listed under
-  **Unreleased**.
+  commit that changed `version` in `pyproject.toml`. Each entry names its commit
+  range, and the tag `vX.Y.Z` marks the last commit of that range (tags for 0.1.0
+  to 0.4.0 were added retroactively on 2026-09-28). Work after the last release is
+  listed under **Unreleased**.
 - **Categories** follow [Keep a Changelog](https://keepachangelog.com/): Added,
   Changed, Fixed, Removed. Each version adds **Motivation** (the problem or evidence
   that led to it), **Verification** (what was actually run) and **Known limits**.
@@ -30,11 +31,18 @@ measurements live in [eval/README.md](eval/README.md) and
 | 0.2.0 | 09-18 | `a1c0a34`…`df1ec51` | Import a real failed GitHub Actions job with provenance | Live fixture run imported and repaired (scripted model) |
 | 0.3.0 | 09-18 | `57ebfcd`…`64860c1` | Pinned PR provenance, patch digests, resumable draft PR publication | 53 tests; publication against real bare remotes |
 | 0.4.0 | 09-18…09-22 | `09afeb6`…`74c0d04` | Hardening, evaluation harnesses, then the automatic lifecycle: policy, stop gate, reconstruction, multi-job, webhook | Paired synthetic, historical and LCA pilots |
-| Unreleased | 09-23…09-28 | `a0a3377`…HEAD | Scope focus, live acceptance, replay fidelity on a real dataset, paired comparison with Pi, orchestration and verification efficiency | Live webhook→draft PR; 39/68 LCA tasks usable; 234 + 21 paired trials |
+| 0.5.0 | 09-23…09-28 | `a0a3377`…`v0.5.0` | Scope focus, live acceptance, replay fidelity on a real dataset, paired comparison with Pi, orchestration and verification efficiency | Live webhook→draft PR; 39/68 LCA tasks usable; 234 + 21 paired trials |
 
 ## [Unreleased]
 
-Changes since 0.4.0, newest stage first. The package version is still `0.4.0`.
+Nothing yet.
+
+## [0.5.0] — 2026-09-28 — replay on real workflows, agent comparison, lean verification
+
+Everything after 0.4.0, newest stage first. The version was not bumped while these
+stages landed, so they ship together; the stages below keep their order and commits.
+New report fields: `baseline_source`, `verification_source`, `same_as` (U4); per-job
+`fixup` and `REGRESSED` handling (U3).
 
 ### Stage U4: verification without redundant reruns (2026-09-28, `7cee58c`)
 
