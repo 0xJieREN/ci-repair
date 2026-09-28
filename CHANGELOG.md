@@ -3,8 +3,7 @@
 This file records how CI Repair evolved from a local prototype into an automatic,
 evaluated repair service: what changed in each version, why, how it was verified,
 and what remained open. Detailed designs live in [docs/](docs/lifecycle.md); detailed
-measurements live in [eval/README.md](eval/README.md) and
-[docs/research-results.md](docs/research-results.md).
+measurements live in [eval/README.md](eval/README.md).
 
 ## Conventions
 
@@ -34,6 +33,12 @@ measurements live in [eval/README.md](eval/README.md) and
 | 0.5.0 | 09-23…09-28 | `a0a3377`…`v0.5.0` | Scope focus, live acceptance, replay fidelity on a real dataset, paired comparison with Pi, orchestration and verification efficiency | Live webhook→draft PR; 39/68 LCA tasks usable; 234 + 21 paired trials; −54% wall time from lean verification (76 valid trials) |
 
 ## [Unreleased]
+
+### Stage R3: one record of past results (2026-09-28)
+
+**Removed**
+- `docs/research-results.md`. Its conclusions and caveats now live under 0.4.0 below,
+  with links to revision `a0a3377`, so results are recorded in one place.
 
 ### Stage R2: evaluation harness robustness (2026-09-28)
 
@@ -216,8 +221,8 @@ themselves, for example tests that need network access or coverage gates.
 
 **Removed** (`1822a92`)
 - The standalone synthetic, historical and LCA benchmark runners, their fixtures and
-  their experiment files. The measured conclusions stay in
-  `docs/research-results.md`, with links to the pre-cleanup revision `a0a3377`.
+  their experiment files. The measured conclusions are kept under 0.4.0 below; the
+  code and data remain at revision `a0a3377`.
   Reason: the product had become the automatic lifecycle, and those runners measured
   the older single-job path.
 
@@ -276,13 +281,21 @@ automatically requires decisions that a model must not make.
 - Probes stage into a throwaway index, so the agent's `git diff` stays intact, and
   diffs are taken against the recorded baseline commit (`24bce9b`).
 
-**Evidence** (details in [docs/research-results.md](docs/research-results.md))
+**Evidence**
 
 | Experiment | CI Repair | Upstream mini | Conclusion |
 |---|---|---|---|
 | 6 synthetic cases × 3 (09-19) | 18/18, 73 calls | 18/18, 107 calls | No success difference on easy cases |
 | 2 historical more-itertools defects (09-19) | 2/2, 17 calls | 2/2, 20 calls | No demonstrated advantage |
 | LCA tasks 24 and 107, selected checks (09-22) | 2/2, 13 calls | 2/2, 28 calls | Local replay only, not the official score |
+
+All trials requested `deepseek/deepseek-flash`, a provider alias rather than a
+pinned backend version. The historical cases used public fixes and hindsight-informed
+checks; the LCA pilot had no hidden oracle, so its false-PASS rate is unknown, not
+zero. These cohorts must not be pooled into one success rate. The protocol
+(`docs/evaluation.md`), experiment records (`docs/experiments/`) and inputs
+(`benchmarks/`) remain at
+[`a0a3377`](https://github.com/0xJieREN/ci-repair/tree/a0a3377c69e04c21fb933d398546a9a5e482bb9d).
 
 **Known limits.** At release, the lifecycle had only been exercised with simulated
 GitHub responses, and the evaluation cohorts were too small to pool.

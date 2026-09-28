@@ -73,8 +73,6 @@ No model API key or paid inference is needed. See
 The repository retains the deliberately broken `examples/buggy` fixture because
 the local repair tests and manual GitHub workflow use it. Local run outputs and
 `.env` are Git-ignored. `config/deepseek-pricing.json` provides estimates, not
-provider billing receipts. Prior benchmark conclusions are condensed in
-[research results](docs/research-results.md); the old research code and data
-remain retrievable from Git history.
-The [changelog](CHANGELOG.md) records each version: motivation, changes,
-verification and known limits.
+provider billing receipts. The [changelog](CHANGELOG.md) records each version:
+motivation, changes, verification evidence and known limits; retired code and
+data remain retrievable from Git history.
