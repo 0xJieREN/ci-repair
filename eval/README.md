@@ -171,36 +171,45 @@ trials serve as the comparison. 21 trials, no infrastructure errors.
   111/117 against Pi's 113/117. The remaining gap is 45 (2/3, budget-bound) and
   53 (2/3). This mixes two commits, so it is an estimate, not a fresh full run.
 
-### Round 3: verification without redundant reruns, partial (2026-09-28)
+### Round 3: verification without redundant reruns (2026-09-28)
 
-Hosted run [36399826597](https://github.com/0xJieREN/ci-repair/actions/runs/36399826597),
-commit `7ab19ca` (includes `7cee58c`: an identical regression check runs once, the
-first repair reuses the run's baseline, and final verification reuses evidence for an
-unchanged tree). CI Repair only, all 39 tasks × 3 repetitions.
+CI Repair only, all 39 tasks × 3 repetitions, measuring `7cee58c` (an identical
+regression check runs once, the first repair reuses the run's baseline, and final
+verification reuses evidence for an unchanged tree). Two hosted runs:
 
-The DeepSeek account ran out of balance during the run. 41 trials received
-`Insufficient Balance` from the provider and were scored as failures by the harness of
-that commit; they are **invalid** (the harness now treats them as infrastructure
-errors). Every task with an invalid trial needs a rerun:
-25, 26, 27, 29, 33, 35, 45, 53, 60, 96, 127, 128, 129, 130, 140, 142, 158, 160.
+- [36399826597](https://github.com/0xJieREN/ci-repair/actions/runs/36399826597),
+  commit `7ab19ca`. The DeepSeek account ran out of balance during the run: 41 trials
+  received `Insufficient Balance` and were scored as failures by the harness of that
+  commit. They are invalid (the harness now treats them as infrastructure errors).
+  Only the 21 tasks with no invalid trial are kept from this run.
+- [36405797931](https://github.com/0xJieREN/ci-repair/actions/runs/36405797931),
+  commit `2492dd0` (v0.6.0), reran every repetition of the other 18 tasks:
+  25, 26, 27, 29, 33, 35, 45, 53, 60, 96, 127, 128, 129, 130, 140, 142, 158, 160.
+  No provider errors. The repair path is unchanged between the two commits; 0.6.0
+  removed only the manual single-job commands and hardened the harness.
 
-Comparison on the 76 valid trials, paired by task and repetition with round 1:
+All 117 trials, paired by task and repetition with round 1:
 
-| Same 76 trials | CI Repair round 1 (`8cd5bce`) | CI Repair round 3 (`7ab19ca`) | Pi round 1 |
+| 117 trials | CI Repair round 1 (`8cd5bce`) | CI Repair round 3 | Pi round 1 |
 |---|---:|---:|---:|
-| Passed | 71 | 73 | 76 |
-| Time per trial, median / mean / p90 | 48 / 137 / 432 s | 30 / 63 / 186 s | 18 / 49 / 98 s |
-| Model calls, median (mean) | 4 (7.4) | 4 (7.7) | 7 (8.7) |
-| Estimated cost, mean per trial | $0.0049 | $0.0044 | $0.0053 |
+| Passed | 107 | 111 | 113 |
+| Time per trial, median / mean / p90 | 60 / 227 / 761 s | 40 / 107 / 274 s | 25 / 66 / 171 s |
+| Total time | 26,617 s | 12,522 s | 7,707 s |
+| Model calls, median (mean) | 5 (9.2) | 5 (8.6) | 8 (11.0) |
+| Estimated cost, mean per trial | $0.0069 | $0.0058 | $0.0078 |
 
-- Total CI Repair wall time fell by 54%, matching the 53% estimated from round 1's
-  recorded timings. Model calls did not change, as expected: the change touches only
-  deterministic verification.
-- Success did not regress. The two extra passes are multi-job task 57 (0/3 → 3/3,
-  from `e64f527`); the three failures are 45 and 53 at the step limit, as before.
-- On the 7 valid multi-job trials the mean time fell from 462 s to 156 s.
-- The valid subset is biased towards tasks that ran before the balance ran out; it
-  excludes the slowest repositories entirely. Pi's time still excludes grading.
+- Total CI Repair wall time fell by 53%, as estimated from round 1's recorded
+  timings (mean 108 s estimated, 107 s measured). Model calls did not change
+  materially: the change touches only deterministic verification.
+- Success did not regress: 111 against 107. Multi-job task 57 went from 0/3 to 3/3
+  (from `e64f527`), and task 53 from 1/3 to 3/3; task 158 went from 2/3 to 1/3.
+  All six failures stopped at the 30-call step limit (tasks 45, 158, 160); in round 1
+  three of the ten failures were rejected by final verification.
+- On the 21 multi-job trials the mean time fell from 385 s to 176 s, and all 21 passed
+  (16 in round 1).
+- Pi remains faster (mean 66 s against 107 s, total 7,707 s against 12,522 s) and
+  passed two more trials. Pi's time still excludes grading, while CI Repair's
+  includes its own verification. Task 160 fails in every arm.
 
 ## Pi tool routing
 
