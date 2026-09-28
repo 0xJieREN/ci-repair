@@ -31,8 +31,16 @@ measurements live in [eval/README.md](eval/README.md).
 | 0.3.0 | 09-18 | `57ebfcd`…`64860c1` | Pinned PR provenance, patch digests, resumable draft PR publication | 53 tests; publication against real bare remotes |
 | 0.4.0 | 09-18…09-22 | `09afeb6`…`74c0d04` | Hardening, evaluation harnesses, then the automatic lifecycle: policy, stop gate, reconstruction, multi-job, webhook | Paired synthetic, historical and LCA pilots |
 | 0.5.0 | 09-23…09-28 | `a0a3377`…`v0.5.0` | Scope focus, live acceptance, replay fidelity on a real dataset, paired comparison with Pi, orchestration and verification efficiency | Live webhook→draft PR; 39/68 LCA tasks usable; 234 + 21 paired trials; −54% wall time from lean verification (76 valid trials) |
+| 0.6.0 | 09-28 | `4504d62`…`v0.6.0` | Remove the manual single-job path; evaluation never scores provider failures; past results in one place | Full gate 240 passed; round 3 partial (76 valid trials) |
 
 ## [Unreleased]
+
+Nothing yet.
+
+## [0.6.0] — 2026-09-28 — run-level only, sturdier evaluation
+
+Commits `4504d62`…`v0.6.0`, newest stage first. Breaking: the manual single-job
+commands are removed (R1).
 
 ### Stage R3: one record of past results (2026-09-28)
 
