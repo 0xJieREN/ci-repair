@@ -101,10 +101,12 @@ def verify_patch(config: Config, archive: Path, image: str, patch_path: Path) ->
     """Independently verify a patch against the failing and regression commands."""
     report = {}
     results = []
-    for name, script in [
-        ("failing", config.failing_command),
-        ("regression", config.regression_command),
-    ]:
+    # Most replayed jobs have no later steps, so the regression check is the failing check.
+    same = config.regression_command.strip() == config.failing_command.strip()
+    checks = [("failing", config.failing_command)]
+    if not same:
+        checks.append(("regression", config.regression_command))
+    for name, script in checks:
         with workspace(archive, image, config.command_seconds, config.wall_seconds) as env:
             env.copy(patch_path, "/tmp/repair.diff")
             env.checked("git apply --index --binary /tmp/repair.diff")
@@ -124,6 +126,11 @@ def verify_patch(config: Config, archive: Path, image: str, patch_path: Path) ->
         report["tests"] = results
         if result["returncode"] != 0 or result.get("exception_info"):
             break
+    if same:
+        # Record the regression check as the failing run it is, without running it twice.
+        alias = {**results[0], "same_as": "failing", "duration_seconds": 0.0}
+        write_json(config.output / "regression.json", alias)
+        results.append(alias)
     report["verified"] = len(results) == 2 and all(
         r["returncode"] == 0 and not r.get("exception_info") for r in results
     )
@@ -190,7 +197,10 @@ def make_gate(
     return gate
 
 
-def run(config: Config, model, policy: Policy | None = None) -> dict:
+def run(
+    config: Config, model, policy: Policy | None = None, *, baseline: dict | None = None
+) -> dict:
+    """`baseline`: the caller's run of the failing command on this exact source and image."""
     policy = policy or Policy.permissive()
     config.validate()
     requested = {
@@ -247,9 +257,13 @@ def run(config: Config, model, policy: Policy | None = None) -> dict:
         context = build_context(config, sha, log, ci, policy)
         (config.output / "context.json").write_text(context + "\n")
         phase = "baseline"
-        with workspace(archive, image, config.command_seconds, config.wall_seconds) as env:
-            baseline = run_test(env, config.failing_command, config.output / "baseline.json")
-        state["command_seconds"] += baseline["duration_seconds"]
+        if baseline is None:
+            with workspace(archive, image, config.command_seconds, config.wall_seconds) as env:
+                baseline = run_test(env, config.failing_command, config.output / "baseline.json")
+            state["command_seconds"] += baseline["duration_seconds"]
+        else:
+            write_json(config.output / "baseline.json", baseline)
+            report["baseline_source"] = "provided"
         if baseline["returncode"] in (0, -1, 124, 126, 127, 137) or baseline.get("exception_info"):
             report["status"] = "BASELINE_NOT_REPRODUCED"
             report["stop_reason"] = StopReason.BASELINE_NOT_REPRODUCED.value

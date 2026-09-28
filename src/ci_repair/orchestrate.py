@@ -107,6 +107,10 @@ def init_candidate(archive: Path, path: Path) -> str:
     return command(["git", "rev-parse", "HEAD"], cwd=path).decode().strip()
 
 
+def tree(path: Path) -> str:
+    return command(["git", "rev-parse", "HEAD^{tree}"], cwd=path).decode().strip()
+
+
 def git_commit(path: Path, message: str):
     subprocess.run(
         ["git", *GIT_IDENTITY, "commit", "-q", "--allow-empty", "-m", message],
@@ -306,7 +310,8 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
         result["baseline_matches_ci_log"] = evidence_overlap(
             entry["log_path"].read_text(errors="replace"), baseline.get("output", "")
         )
-        if cumulative.read_bytes():
+        prior = bool(cumulative.read_bytes())
+        if prior:
             (job_dir / "prior-check").mkdir()
             check = verify_patch(
                 replace(cfg, output=job_dir / "prior-check"), archive, image, cumulative
@@ -314,6 +319,7 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
             if check.get("verified"):
                 result["status"] = "FIXED_BY_PRIOR"  # no agent started
                 result["config"] = cfg
+                result["evidence"] = (tree(candidate), check["tests"], "prior-check")
                 continue
         others = [
             {
@@ -325,7 +331,11 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
             if o is not entry
         ]
         task = job_task(entry["meta"], repaired_names, others)
-        repair = run_pipeline(replace(cfg, task=task), model_factory(), policy)
+        # Without earlier repairs the candidate is the original tree, so the baseline above
+        # is the pipeline's baseline; afterwards the pipeline replays it on the candidate.
+        repair = run_pipeline(
+            replace(cfg, task=task), model_factory(), policy, baseline=None if prior else baseline
+        )
         for key in ("model_calls", "estimated_cost_usd", "agent_steps"):
             usage[key] += repair.get("usage", {}).get(key, 0)
         usage["models_used"].update(repair.get("usage", {}).get("models_used", []))
@@ -340,6 +350,9 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
         cumulative.write_bytes(command(["git", "diff", "--binary", base, "HEAD"], cwd=candidate))
         repaired_names.append(entry["job_name"])
         result.update(status="REPAIRED", config=cfg)
+        if not prior:
+            # Verified exactly as final verification would: this tree, applied to the original.
+            result["evidence"] = (tree(candidate), repair["tests"], "repair")
 
     # A run-level PASS must not silently omit known timeouts/cancellations.
     results.extend(
@@ -349,10 +362,21 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
     addressed = [r for r in results if r.get("status") in ("REPAIRED", "FIXED_BY_PRIOR")]
 
     def verify_all(label: str, jobs: list[dict]) -> list[dict]:
-        """Jobs against the one cumulative patch, in fresh containers."""
+        """Jobs against the one cumulative patch, in fresh containers.
+
+        A job whose checks already passed with a patch applied to the original snapshot that
+        yields this same tree, in this job's image, keeps that evidence instead of a rerun.
+        """
         found = []
+        final_tree = tree(candidate)
         for result in jobs:
             cfg = result["config"]
+            evidence = result.get("evidence")
+            if evidence and evidence[0] == final_tree:
+                result["final_verification"] = "PASS"
+                result["verification_source"] = f"jobs/{result['job_id']}/{evidence[2]}"
+                found.extend(evidence[1])
+                continue
             directory = output / label / str(result["job_id"])
             directory.mkdir(parents=True)
             final = verify_patch(replace(cfg, output=directory), archive, cfg.image, cumulative)
@@ -385,6 +409,7 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
         report["policy_decision"] = decision.to_dict()
     for result in results:
         result.pop("config", None)
+        result.pop("evidence", None)
     report["jobs"] = results
     report["tests"] = tests
     report.update(summarize(results, patch, report.get("policy_decision")))
@@ -396,11 +421,12 @@ def fix_up(result, addressed, output, candidate, cumulative, base, model_factory
     cfg = result["config"]
     job_dir = output / "jobs" / str(result["job_id"])
     current = output / "verification" / str(result["job_id"])
-    failure = "\n".join(
-        json.loads(p.read_text()).get("output", "")
+    records = [
+        json.loads(p.read_text())
         for p in (current / "failing.json", current / "regression.json")
         if p.exists()
-    )
+    ]
+    failure = "\n".join(r.get("output", "") for r in records if not r.get("same_as"))
     (job_dir / "fixup-failure.log").write_text(failure)
     others = [r["job_name"] for r in addressed if r is not result]
     task = (

@@ -97,8 +97,12 @@ patch already passes this job's checks, mark `FIXED_BY_PRIOR` (no agent) →
 otherwise repair on a candidate repository that contains earlier repairs →
 commit. Each job's task also lists the other failed jobs of the run with the first
 error block of their logs (bounded, marked untrusted), because jobs of one run
-often share a cause. Finally every `REPAIRED`/`FIXED_BY_PRIOR` job is re-verified
-with the one cumulative patch against the original snapshot. A job broken by a
+often share a cause. The first repaired job reuses the run's baseline, since its
+candidate is still the original tree. Finally every `REPAIRED`/`FIXED_BY_PRIOR` job is
+re-verified with the one cumulative patch against the original snapshot, unless its
+checks already passed on exactly that tree applied to the original snapshot in its
+image (a single-job run, or no later change); `verification_source` then names that
+evidence. A job broken by a
 later repair becomes `REGRESSED` and gets **one** fix-up attempt on the combined
 change, with its current failure as the log. Only if a fix-up verifies are the jobs
 verified again; a job that is still broken keeps `REGRESSED` and the run fails.

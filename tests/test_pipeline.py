@@ -262,3 +262,55 @@ def test_context_mismatch_is_stale_source_not_agent_failure(tmp_path, monkeypatc
     report = run(replace(cfg, ci_context=manifest), object())
     assert report["stop_reason"] == "STALE_SOURCE"
     assert report["error_phase"] == "inputs"
+
+
+@pytest.mark.parametrize(
+    "regression,provided,phases",
+    [("test-all", False, 4), ("test-one", False, 3), ("test-one", True, 2)],
+)
+def test_identical_checks_and_provided_baseline_run_once(
+    tmp_path, monkeypatch, regression, provided, phases
+):
+    from dataclasses import replace
+
+    cfg = replace(config(tmp_path), regression_command=regression)
+    commands = []
+
+    class Env:
+        def execute(self, action):
+            commands.append(action["command"])
+            failing = len(commands) == 1 and not provided
+            return {"returncode": 1 if failing else 0, "output": "out", "exception_info": ""}
+
+        def copy(self, *args):
+            pass
+
+        def checked(self, script):
+            if "--name-only" in script:
+                return "src/a.py\0"
+            if "--raw" in script:
+                return ":100644 100644 a b M\tsrc/a.py"
+            return ""
+
+    opened = []
+
+    @contextmanager
+    def factory(*args):
+        opened.append(True)
+        yield Env()
+
+    monkeypatch.setattr(pipeline, "workspace", factory)
+    monkeypatch.setattr(pipeline, "snapshot", lambda *args: "abc")
+    monkeypatch.setattr(pipeline, "command", lambda *args: b"sha256:image")
+    monkeypatch.setattr(pipeline, "extract_patch", lambda *args: b"patch")
+    monkeypatch.setattr(pipeline, "RepairAgent", FakeAgent)
+    baseline = {"command": "test-one", "returncode": 1, "output": "", "duration_seconds": 5.0}
+    report = run(cfg, object(), baseline=baseline if provided else None)
+    assert report["status"] == "PASS"
+    assert len(opened) == phases
+    # Evidence keeps one record per check; an identical regression check is marked, not rerun.
+    assert [t["command"] for t in report["tests"]] == ["test-one", regression]
+    assert bool(report["tests"][1].get("same_as")) == (regression == "test-one")
+    assert (cfg.output / "regression.json").exists()
+    assert report.get("baseline_source") == ("provided" if provided else None)
+    assert json.loads((cfg.output / "baseline.json").read_text())["returncode"] == 1

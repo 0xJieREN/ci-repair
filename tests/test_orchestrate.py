@@ -206,6 +206,34 @@ def test_multi_job_run_accumulates_one_verified_patch(tmp_path, unresolved_job):
         remove_images(report)
 
 
+@pytest.mark.docker
+@pytest.mark.skipif(os.getenv("CI_REPAIR_DOCKER_TESTS") != "1", reason="Docker opt-in required")
+def test_single_job_run_reuses_its_verification_and_baseline(tmp_path):
+    from test_docker import scripted_model
+
+    root = collection(tmp_path, jobs=(("lint", "check"),))
+    output = tmp_path / "out"
+    policy = Policy({"repositories": [{"name": "owner/repo", "allowed_paths": ["src/"]}]})
+    report = repair_run(
+        root,
+        output,
+        model_factory=lambda: scripted_model("sed -i 's/value = 0/value = 1/' src/app.py"),
+        policy=policy,
+    )
+    try:
+        assert report["status"] == "PASS", report
+        job = report["jobs"][0]
+        assert job["final_verification"] == "PASS"
+        # The repair verified this tree on the original snapshot; nothing is replayed again.
+        assert job["verification_source"] == "jobs/1/repair"
+        assert not (output / "verification").exists()
+        assert len(report["tests"]) == 2 and report["tests"][1]["same_as"] == "failing"
+        repair = json.loads((output / "jobs/1/repair/report.json").read_text())
+        assert repair["baseline_source"] == "provided"
+    finally:
+        remove_images(report)
+
+
 def remove_images(report):
     for job in report["jobs"]:
         image = (job.get("environment") or {}).get("image_id")
