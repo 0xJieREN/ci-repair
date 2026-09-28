@@ -76,3 +76,5 @@ the local repair tests and manual GitHub workflow use it. Local run outputs and
 provider billing receipts. Prior benchmark conclusions are condensed in
 [research results](docs/research-results.md); the old research code and data
 remain retrievable from Git history.
+The [changelog](CHANGELOG.md) records each version: motivation, changes,
+verification and known limits.
