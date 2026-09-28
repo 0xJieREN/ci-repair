@@ -14,7 +14,7 @@ CI failure (workflow_run completed/failure)
  → reconstruct  workflow + job metadata + log → hashed spec: SUPPORTED/REVIEW/UNSUPPORTED
  → build        setup steps once in a disposable container → content-addressed image
  → policy       budgets, model, allowed paths, patch categories (outside the agent)
- → repair       per job, ordered; baseline on original; skip if prior patch fixes it
+ → repair       per job, ordered; baseline alongside the agent; skip if prior patch fixes it
  → stop         submit gate / verified early stop / limits → agent_exit + stop_reason
  → verify       every addressed job re-verified with the cumulative patch, fresh containers
  → gate         ALLOW / REVIEW / DENY from evidence + current policy
@@ -93,13 +93,18 @@ uv run ci-repair-pr auto runs/run-<timestamp> --policy ~/ci-repair/policy.yaml \
 
 Order is deterministic and explained in `report.order`: transitive `needs`
 first, then workflow position, job name and job ID. For each job:
-reconstruct → build → baseline on the **original** source → if the cumulative
-patch already passes this job's checks, mark `FIXED_BY_PRIOR` (no agent) →
-otherwise repair on a candidate repository that contains earlier repairs →
-commit. Each job's task also lists the other failed jobs of the run with the first
+reconstruct → build → if earlier jobs were repaired: baseline on the **original**
+source, and if the cumulative patch already passes this job's checks, mark
+`FIXED_BY_PRIOR` (no agent) → otherwise repair on a candidate repository that
+contains earlier repairs → commit. Each job's task also lists the other failed jobs of the run with the first
 error block of their logs (bounded, marked untrusted), because jobs of one run
-often share a cause. The first repaired job reuses the run's baseline, since its
-candidate is still the original tree. Finally every `REPAIRED`/`FIXED_BY_PRIOR` job is
+often share a cause. Each repair replays the failing command on its candidate in a
+separate container while the agent starts, because the agent's first calls only read
+logs and code. For a job with no earlier repairs the candidate is the original tree,
+so that is its only baseline. The gate waits for the baseline before it verifies
+anything, so no probe competes with it for CPU; if the failure does not reproduce,
+the session ends at the next step and the job is `BASELINE_NOT_REPRODUCED`, with the
+agent's edits discarded. Finally every `REPAIRED`/`FIXED_BY_PRIOR` job is
 re-verified with the one cumulative patch against the original snapshot, unless its
 checks already passed on exactly that tree applied to the original snapshot in its
 image (a single-job run, or no later change); `verification_source` then names that

@@ -77,6 +77,14 @@ def test_verified_probe_stops_before_agent_can_continue_editing():
     assert a.steps_executed == 2
 
 
+def test_gate_can_end_the_session_for_another_reason():
+    gate = Gate(probe=[GateResult(True, exit=AgentExit.BASELINE_NOT_REPRODUCED)])
+    a = agent(["echo explore", SUBMIT], gate)
+    a.run("task")
+    assert a.exit_status() == AgentExit.BASELINE_NOT_REPRODUCED
+    assert a.n_calls == 1
+
+
 @pytest.mark.parametrize(
     "kwargs,expected",
     [
@@ -118,7 +126,7 @@ class PatchEnv:
         return self.files
 
 
-def gate_fixture(tmp_path, monkeypatch, patches, verdicts, policy=None):
+def gate_fixture(tmp_path, monkeypatch, patches, verdicts, policy=None, baseline=None):
     cfg = Config(tmp_path, tmp_path / "log", tmp_path / "out", "img", "one", "all")
     cfg.output.mkdir()
     patches = list(patches)
@@ -150,8 +158,41 @@ def gate_fixture(tmp_path, monkeypatch, patches, verdicts, policy=None):
     monkeypatch.setattr(pipeline, "verify_patch", verify)
     state = {"gates": {}, "probes": 0, "command_seconds": 0.0}
     env = PatchEnv()
-    gate = make_gate(cfg, policy or Policy(), Path("a.tar"), "img", env, state)
+    gate = make_gate(cfg, policy or Policy(), Path("a.tar"), "img", env, state, "HEAD", baseline)
     return gate, verified, state, env
+
+
+class PendingBaseline:
+    def __init__(self):
+        self.finished, self.returncode, self.waits = False, 1, 0
+
+    def done(self):
+        return self.finished
+
+    def result(self):
+        self.waits += 1
+        self.finished = True
+        return {"returncode": self.returncode, "output": "", "exception_info": ""}
+
+
+def test_gate_verifies_only_after_the_baseline_reproduced(tmp_path, monkeypatch):
+    baseline = PendingBaseline()
+    gate, verified, _, _ = gate_fixture(
+        tmp_path, monkeypatch, [b"", b"+a\n"], [True], baseline=baseline
+    )
+    assert gate("probe").accept is False and baseline.waits == 0  # nothing to verify yet
+    assert gate("probe").exit is AgentExit.EARLY_STOP_VERIFIED
+    assert baseline.waits == 1 and verified == [b"+a\n"]
+
+
+def test_gate_ends_the_session_when_the_baseline_passes(tmp_path, monkeypatch):
+    baseline = PendingBaseline()
+    baseline.returncode = 0
+    gate, verified, _, _ = gate_fixture(tmp_path, monkeypatch, [b"+a\n"], [], baseline=baseline)
+    result = gate("probe")  # waits for the baseline instead of verifying
+    assert result.accept and result.exit is AgentExit.BASELINE_NOT_REPRODUCED
+    assert gate("submit").exit is AgentExit.BASELINE_NOT_REPRODUCED  # no patch extracted
+    assert verified == []
 
 
 def test_gate_caches_by_digest_and_explains_failures(tmp_path, monkeypatch):

@@ -21,6 +21,7 @@ class AgentExit(str, Enum):
     SUBMITTED = "SUBMITTED"  # agent requested submission and the gate accepted it
     SUBMITTED_NO_PATCH = "SUBMITTED_NO_PATCH"
     EARLY_STOP_VERIFIED = "EARLY_STOP_VERIFIED"  # system stopped: verification passed
+    BASELINE_NOT_REPRODUCED = "BASELINE_NOT_REPRODUCED"  # system stopped: nothing to repair
     SUBMISSION_REJECTED = "SUBMISSION_REJECTED"  # too many rejected submissions
     STEP_LIMIT = "STEP_LIMIT"
     COST_LIMIT = "COST_LIMIT"
@@ -73,9 +74,12 @@ def final_stop_reason(
 
 @dataclass(frozen=True)
 class GateResult:
+    """`accept` ends the session, by default as a verified submission or early stop;
+    otherwise `feedback` goes back to the agent."""
+
     accept: bool
     feedback: str = ""
-    exit: AgentExit = AgentExit.SUBMITTED
+    exit: AgentExit | None = None
 
 
 def _exit(reason: AgentExit, content: str = "") -> dict:
@@ -130,7 +134,7 @@ class RepairAgent(DefaultAgent):
             self.submissions += 1
             result = self.gate("submit")
             if result.accept:
-                raise InterruptAgentFlow(_exit(result.exit))
+                raise InterruptAgentFlow(_exit(result.exit or AgentExit.SUBMITTED))
             self.rejected_submissions += 1
             if self.rejected_submissions >= self.max_rejected_submissions:
                 raise InterruptAgentFlow(_exit(AgentExit.SUBMISSION_REJECTED))
@@ -142,7 +146,7 @@ class RepairAgent(DefaultAgent):
         if self.early_stop:
             result = self.gate("probe")
             if result.accept:
-                raise InterruptAgentFlow(_exit(AgentExit.EARLY_STOP_VERIFIED))
+                raise InterruptAgentFlow(_exit(result.exit or AgentExit.EARLY_STOP_VERIFIED))
         return messages
 
     def exit_status(self) -> str:

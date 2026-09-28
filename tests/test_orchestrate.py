@@ -208,7 +208,7 @@ def test_multi_job_run_accumulates_one_verified_patch(tmp_path, unresolved_job):
 
 @pytest.mark.docker
 @pytest.mark.skipif(os.getenv("CI_REPAIR_DOCKER_TESTS") != "1", reason="Docker opt-in required")
-def test_single_job_run_reuses_its_verification_and_baseline(tmp_path):
+def test_single_job_run_replays_its_baseline_and_verification_once(tmp_path):
     from test_docker import scripted_model
 
     root = collection(tmp_path, jobs=(("lint", "check"),))
@@ -228,12 +228,39 @@ def test_single_job_run_reuses_its_verification_and_baseline(tmp_path):
         assert job["verification_source"] == "jobs/1/repair"
         assert not (output / "verification").exists()
         assert len(report["tests"]) == 2 and report["tests"][1]["same_as"] == "failing"
-        repair = json.loads((output / "jobs/1/repair/report.json").read_text())
-        assert repair["baseline_source"] == "provided"
+        # The one baseline ran inside the pipeline, alongside the agent.
+        assert not (output / "jobs/1/baseline.json").exists()
+        assert json.loads((output / "jobs/1/repair/baseline.json").read_text())["returncode"]
+        assert "baseline_matches_ci_log" in job  # None: the toy log has no error line
         # The reused evidence has the shape publication requires.
         from ci_repair.publish import verified_run
 
         assert verified_run(output)[0]["patch_sha256"] == report["patch_sha256"]
+    finally:
+        remove_images(report)
+
+
+@pytest.mark.docker
+@pytest.mark.skipif(os.getenv("CI_REPAIR_DOCKER_TESTS") != "1", reason="Docker opt-in required")
+def test_job_that_passes_on_replay_is_not_repaired(tmp_path):
+    from test_docker import scripted_model
+
+    workflow = WORKFLOW.replace("assert value == 1", "assert value == 0")
+    root = collection(tmp_path, workflow, jobs=(("lint", "check"),))
+    output = tmp_path / "out"
+    policy = Policy({"repositories": [{"name": "owner/repo", "allowed_paths": ["src/"]}]})
+    report = repair_run(
+        root,
+        output,
+        model_factory=lambda: scripted_model("sed -i 's/value = 0/value = 1/' src/app.py"),
+        policy=policy,
+    )
+    try:
+        assert report["status"] == "FAIL" and report["verified"] is False
+        assert report["jobs"][0]["status"] == "BASELINE_NOT_REPRODUCED"
+        assert report["stop_reason"] == "BASELINE_NOT_REPRODUCED"
+        assert not (output / "verification").exists()
+        assert (output / "patch.diff").read_bytes() == b""  # the agent's edit is discarded
     finally:
         remove_images(report)
 

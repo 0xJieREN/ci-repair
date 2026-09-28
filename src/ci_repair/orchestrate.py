@@ -20,7 +20,7 @@ from typing import Callable
 from ci_repair.agent import StopReason
 from ci_repair.context import evidence_overlap, failure_evidence
 from ci_repair.github import CollectionError, load_context
-from ci_repair.pipeline import Config, run_test, verify_patch, write_json
+from ci_repair.pipeline import Config, reproduced, run_test, verify_patch, write_json
 from ci_repair.pipeline import run as run_pipeline
 from ci_repair.policy import Policy, PolicyError, Verdict, load_policy
 from ci_repair.reconstruct import (
@@ -32,7 +32,6 @@ from ci_repair.reconstruct import (
 )
 from ci_repair.workspace import clean_head, command, snapshot, workspace
 
-BASELINE_UNREPRODUCED = (0, -1, 124, 126, 127, 137)
 GIT_IDENTITY = [
     "-c",
     "user.name=ci-repair",
@@ -301,16 +300,16 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
             allowed_paths=allowed,
             **effective,
         )
-        with workspace(archive, image, cfg.command_seconds, cfg.command_seconds + 60) as env:
-            baseline = run_test(env, failing, job_dir / "baseline.json")
-        if baseline["returncode"] in BASELINE_UNREPRODUCED or baseline.get("exception_info"):
-            result["status"] = "BASELINE_NOT_REPRODUCED"
-            continue
-        result["baseline_matches_ci_log"] = evidence_overlap(
-            entry["log_path"].read_text(errors="replace"), baseline.get("output", "")
-        )
+        ci_log = entry["log_path"].read_text(errors="replace")
         prior = bool(cumulative.read_bytes())
         if prior:
+            # The job must fail on the original source before earlier repairs are credited.
+            with workspace(archive, image, cfg.command_seconds, cfg.command_seconds + 60) as env:
+                baseline = run_test(env, failing, job_dir / "baseline.json")
+            if not reproduced(baseline):
+                result["status"] = "BASELINE_NOT_REPRODUCED"
+                continue
+            result["baseline_matches_ci_log"] = evidence_overlap(ci_log, baseline.get("output", ""))
             (job_dir / "prior-check").mkdir()
             check = verify_patch(
                 replace(cfg, output=job_dir / "prior-check"), archive, image, cumulative
@@ -330,15 +329,20 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
             if o is not entry
         ]
         task = job_task(entry["meta"], repaired_names, others)
-        # Without earlier repairs the candidate is the original tree, so the baseline above
-        # is the pipeline's baseline; afterwards the pipeline replays it on the candidate.
-        repair = run_pipeline(
-            replace(cfg, task=task), model_factory(), policy, baseline=None if prior else baseline
-        )
+        # Without earlier repairs the candidate is the original tree, so the pipeline's
+        # baseline, run alongside the agent, is this job's baseline.
+        repair = run_pipeline(replace(cfg, task=task), model_factory(), policy)
         for key in ("model_calls", "estimated_cost_usd", "agent_steps"):
             usage[key] += repair.get("usage", {}).get(key, 0)
         usage["models_used"].update(repair.get("usage", {}).get("models_used", []))
         result.update(repair_status=repair["status"], stop_reason=repair.get("stop_reason"))
+        record = cfg.output / "baseline.json"
+        if not prior and record.exists():
+            output_text = json.loads(record.read_text()).get("output", "")
+            result["baseline_matches_ci_log"] = evidence_overlap(ci_log, output_text)
+        if repair["status"] == "BASELINE_NOT_REPRODUCED":
+            result["status"] = "BASELINE_NOT_REPRODUCED"
+            continue
         if not repair.get("verified"):
             result["status"] = "REPAIR_FAILED"
             continue

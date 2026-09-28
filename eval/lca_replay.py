@@ -24,8 +24,7 @@ from pathlib import Path
 from lca_coverage import dataset, job_specs, task_status
 
 from ci_repair.context import evidence_overlap
-from ci_repair.orchestrate import BASELINE_UNREPRODUCED
-from ci_repair.pipeline import Config, run_test, verify_patch
+from ci_repair.pipeline import Config, reproduced, run_test, verify_patch
 from ci_repair.policy import Policy
 from ci_repair.reconstruct import UNSUPPORTED, build_environment, replay_commands
 from ci_repair.workspace import command, snapshot, workspace
@@ -85,15 +84,12 @@ def replay_job(entry, archive, reference, directory, policy, network, setup_env)
     try:
         with workspace(archive, image, COMMAND_SECONDS, COMMAND_SECONDS + 60) as env:
             baseline = run_test(env, failing, directory / "baseline.json")
-        reproduced = baseline["returncode"] not in BASELINE_UNREPRODUCED and not baseline.get(
-            "exception_info"
-        )
         result["baseline"] = {
             "returncode": baseline["returncode"],
             "matches_ci_log": evidence_overlap(entry["log"], baseline.get("output", "")),
             "seconds": round(baseline["duration_seconds"], 1),
         }
-        if not reproduced:
+        if not reproduced(baseline):
             return {**result, "status": "BASELINE_NOT_REPRODUCED"}
         (directory / "reference").mkdir()
         config = Config(

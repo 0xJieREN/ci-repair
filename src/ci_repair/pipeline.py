@@ -5,7 +5,9 @@ import json
 import math
 import shutil
 import signal
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
@@ -24,8 +26,15 @@ SYSTEM_TEMPLATE = (
 )
 
 
+BASELINE_UNREPRODUCED = (0, -1, 124, 126, 127, 137)
+
+
 class RunDeadline(BaseException):
     """Bypass adapter retries and command exception handlers."""
+
+
+class BaselineError(Exception):
+    """The concurrent baseline failed; it may surface inside the agent loop via the gate."""
 
 
 @dataclass(frozen=True)
@@ -92,6 +101,52 @@ def run_test(env, script: str, output: Path) -> dict:
     return record
 
 
+def reproduced(record: dict) -> bool:
+    return record["returncode"] not in BASELINE_UNREPRODUCED and not record.get("exception_info")
+
+
+class Baseline:
+    """The failing command on the original source, in its own container, while the agent starts.
+
+    Nothing is verified before it has confirmed the failure: the gate waits for it, so no
+    probe competes with it for CPU, and a failure that does not reproduce ends the session.
+    """
+
+    def __init__(self, config: Config, archive: Path, image: str):
+        self.waited = 0.0
+        self._env = None
+        self._stop = threading.Event()
+        self._pool = ThreadPoolExecutor(1, thread_name_prefix="baseline")
+        self._future = self._pool.submit(self._run, config, archive, image)
+
+    def _run(self, config, archive, image) -> dict:
+        with workspace(archive, image, config.command_seconds, config.wall_seconds) as env:
+            self._env = env
+            if self._stop.is_set():
+                raise RuntimeError("Baseline cancelled")
+            return run_test(env, config.failing_command, config.output / "baseline.json")
+
+    def done(self) -> bool:
+        return self._future.done()
+
+    def result(self) -> dict:
+        started = time.monotonic()
+        try:
+            return self._future.result()
+        except Exception as exc:
+            raise BaselineError(type(exc).__name__) from exc
+        finally:
+            self.waited += time.monotonic() - started
+
+    def close(self):
+        """Stop a baseline nobody will wait for, such as after an agent error or the deadline."""
+        # Set before reading _env; _run sets _env before checking: one side always sees the other.
+        self._stop.set()
+        if self._env is not None and not self._future.done():
+            self._env.cleanup()
+        self._pool.shutdown(wait=True)
+
+
 def verify_patch(config: Config, archive: Path, image: str, patch_path: Path) -> dict:
     """Independently verify a patch against the failing and regression commands."""
     report = {}
@@ -140,16 +195,27 @@ def patch_files(env, base: str = "HEAD", *, probe: bool = False) -> list[str]:
 
 
 def make_gate(
-    config: Config, policy: Policy, archive: Path, image: str, env, state: dict, base="HEAD"
+    config: Config,
+    policy: Policy,
+    archive: Path,
+    image: str,
+    env,
+    state: dict,
+    base="HEAD",
+    baseline: Baseline | None = None,
 ):
     """Deterministic gate for agent submissions and verifier-triggered early stop.
 
     Verification runs in fresh containers from the original snapshot, never in the agent's
-    workspace, and results are cached per patch digest.
+    workspace, and results are cached per patch digest. With a pending `baseline`, the
+    session ends as soon as it shows the failure does not reproduce.
     """
     repair = policy.data["repair"]
+    unreproduced = GateResult(True, exit=AgentExit.BASELINE_NOT_REPRODUCED)
 
     def gate(kind: str) -> GateResult:
+        if baseline and baseline.done() and not reproduced(baseline.result()):
+            return unreproduced
         patch = extract_patch(env, base, probe=True)
         if not patch:
             return GateResult(kind == "submit", exit=AgentExit.SUBMITTED_NO_PATCH)
@@ -161,6 +227,8 @@ def make_gate(
                 state["gates"][key] = {"policy": decision.to_dict(), "status": "PATCH_REJECTED"}
             elif kind == "probe" and state["probes"] >= repair["max_probes"]:
                 return GateResult(False)
+            elif baseline and not reproduced(baseline.result()):
+                return unreproduced
             else:
                 state["probes"] += 1
                 probe = config.output / "probes" / f"{state['probes']:02d}"
@@ -192,10 +260,7 @@ def make_gate(
     return gate
 
 
-def run(
-    config: Config, model, policy: Policy | None = None, *, baseline: dict | None = None
-) -> dict:
-    """`baseline`: the caller's run of the failing command on this exact source and image."""
+def run(config: Config, model, policy: Policy | None = None) -> dict:
     policy = policy or Policy.permissive()
     config.validate()
     requested = {
@@ -219,6 +284,7 @@ def run(
     }
     state = {"gates": {}, "probes": 0, "command_seconds": 0.0}
     agent = None
+    baseline = None
     phase = "inputs"
     patch = b""
 
@@ -247,18 +313,8 @@ def run(
         report["image_id"] = image
         context = build_context(config, sha, log, policy)
         (config.output / "context.json").write_text(context + "\n")
-        phase = "baseline"
-        if baseline is None:
-            with workspace(archive, image, config.command_seconds, config.wall_seconds) as env:
-                baseline = run_test(env, config.failing_command, config.output / "baseline.json")
-            state["command_seconds"] += baseline["duration_seconds"]
-        else:
-            write_json(config.output / "baseline.json", baseline)
-            report["baseline_source"] = "provided"
-        if baseline["returncode"] in (0, -1, 124, 126, 127, 137) or baseline.get("exception_info"):
-            report["status"] = "BASELINE_NOT_REPRODUCED"
-            report["stop_reason"] = StopReason.BASELINE_NOT_REPRODUCED.value
-            return report
+        # The agent's first calls only read logs and code, so they need not wait for the baseline.
+        baseline = Baseline(config, archive, image)
         phase = "agent"
         with workspace(archive, image, config.command_seconds, config.wall_seconds) as env:
             # Diff against the recorded baseline so an agent commit cannot hide changes.
@@ -266,7 +322,7 @@ def run(
             agent = RepairAgent(
                 model,
                 env,
-                gate=make_gate(config, policy, archive, image, env, state, base),
+                gate=make_gate(config, policy, archive, image, env, state, base, baseline),
                 early_stop=policy.data["repair"]["early_stop"],
                 max_rejected_submissions=policy.data["repair"]["max_rejected_submissions"],
                 system_template=SYSTEM_TEMPLATE,
@@ -282,6 +338,13 @@ def run(
             (config.output / "patch.diff").write_bytes(patch)
             report["patch_sha256"] = hashlib.sha256(patch).hexdigest()
             paths = patch_files(env, base) if patch else []
+        phase = "baseline"
+        record = baseline.result()
+        state["command_seconds"] += record["duration_seconds"]
+        if not reproduced(record):
+            report["status"] = "BASELINE_NOT_REPRODUCED"
+            report["stop_reason"] = StopReason.BASELINE_NOT_REPRODUCED.value
+            return report
         if not patch:
             report["status"] = "NO_PATCH"
             return report
@@ -308,7 +371,7 @@ def run(
         report["status"] = "TIMEOUT" if isinstance(exc, RunDeadline) else "ERROR"
         # Avoid serializing provider exceptions: these can contain request credentials.
         report["error_type"] = type(exc).__name__
-        report["error_phase"] = phase
+        report["error_phase"] = "baseline" if isinstance(exc, BaselineError) else phase
         if isinstance(exc, RunDeadline):
             report["stop_reason"] = StopReason.WALL_TIME_LIMIT.value
         else:
@@ -316,6 +379,9 @@ def run(
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, previous_handler)
+        if baseline is not None:
+            baseline.close()
+            report["baseline_wait_seconds"] = baseline.waited
         if "stop_reason" not in report:
             report["stop_reason"] = final_stop_reason(
                 verified=report.get("verified") is True,

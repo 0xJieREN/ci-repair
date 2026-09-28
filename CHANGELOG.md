@@ -32,10 +32,55 @@ measurements live in [eval/README.md](eval/README.md).
 | 0.4.0 | 09-18…09-22 | `09afeb6`…`74c0d04` | Hardening, evaluation harnesses, then the automatic lifecycle: policy, stop gate, reconstruction, multi-job, webhook | Paired synthetic, historical and LCA pilots |
 | 0.5.0 | 09-23…09-28 | `a0a3377`…`v0.5.0` | Scope focus, live acceptance, replay fidelity on a real dataset, paired comparison with Pi, orchestration and verification efficiency | Live webhook→draft PR; 39/68 LCA tasks usable; 234 + 21 paired trials; −53% wall time from lean verification (round 3, 117 trials) |
 | 0.6.0 | 09-28 | `4504d62`…`v0.6.0` | Remove the manual single-job path; evaluation never scores provider failures; past results in one place | Full gate 240 passed; round 3 completed by a rerun with no provider errors |
+| Unreleased | 09-28 | — | Baseline alongside the agent | Full gate 246 passed; saving not yet measured |
 
 ## [Unreleased]
 
-Nothing yet.
+### Stage S1: baseline alongside the agent (2026-09-28)
+
+**Motivation.** After lean verification (U4), round 3 of the Pi comparison (117
+trials; runs `36399826597` and `36405797931`) spent 107 s per CI Repair trial on
+average against Pi's 66 s. Final verification had dropped to 1 s, but reproducing the
+baseline before the agent started still took 36 s (34%), and probes 29 s (27%). The
+baseline gates the repair, yet the agent's first calls only read the log and the code
+and do not need its result.
+
+**Changed**
+- `pipeline.run` starts the baseline in its own container on a background thread and
+  starts the agent at once. The gate waits for the baseline before its first
+  verification, so probes never compete with it for CPU, and nothing is accepted
+  before the failure has reproduced. If the baseline passes or times out, the gate
+  ends the session at the next step (`AgentExit.BASELINE_NOT_REPRODUCED`) and the
+  report is `BASELINE_NOT_REPRODUCED`, whatever the agent did. On an agent error or
+  the wall-clock deadline, a baseline still running is killed. A baseline that
+  fails to run is reported with `error_phase: baseline`, even when the gate hit it
+  inside the agent loop, so it is not mistaken for a provider error. The report
+  records `baseline_wait_seconds`, the time the pipeline actually waited for it.
+- The run orchestrator no longer replays the baseline itself for a job with no
+  earlier repairs; the pipeline's baseline is that job's baseline and feeds
+  `baseline_matches_ci_log`. After earlier repairs it still replays the original
+  source first, because `FIXED_BY_PRIOR` must not credit a job that never failed.
+- `GateResult.exit` defaults per hook (submission or early stop), so a gate can end
+  a session for another reason.
+
+**Removed**
+- The `baseline` argument of `pipeline.run` and the `baseline_source` report field
+  (U4), superseded by the concurrent baseline.
+
+**Verification.** Full gate `scripts/check.sh --colima`: 246 passed. New unit tests
+cover an agent that runs while the baseline is still running, an agent error that
+kills a pending baseline, a baseline error attributed to its phase, the gate waiting
+for the baseline before verifying and ending the session when it passes, and a gate
+ending a session with a non-default exit. A new Docker test replays a job whose command passes: the job is
+`BASELINE_NOT_REPRODUCED`, nothing is verified and the patch is empty. **Estimate**
+from round 3's recorded timings: at most the 36 s (34%) of baseline time per trial
+can be saved; the actual saving is bounded by how long the agent works before its
+first patch. Not yet measured.
+
+**Known limits.** A job whose failure does not reproduce now costs the model calls
+made before its baseline finished; the eval tasks all reproduce, so this cost only
+shows in production. The agent's own commands share the host with the baseline
+container while it runs.
 
 ## [0.6.0] — 2026-09-28 — run-level only, sturdier evaluation
 
