@@ -200,7 +200,7 @@ def canonical_check(item: dict, policy: Policy) -> tuple[str | None, dict]:
 
 def default_repair(item: dict, directory: Path, policy: Policy) -> dict:
     """collect -> orchestrate -> publication gate -> draft PR (only on ALLOW)."""
-    from ci_repair.cli import make_model
+    from ci_repair.model import make_model
     from ci_repair.orchestrate import repair_run
     from ci_repair.publish import PublicationError, auto
 

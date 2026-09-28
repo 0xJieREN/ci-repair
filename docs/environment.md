@@ -1,9 +1,8 @@
 # CI environment reconstruction
 
 `reconstruct.py` turns pinned evidence into a replay specification, then builds a
-replay image. It never executes workflow content on the host, and it replaces
-the manual image/command choice of [reviewed plans](replay-plan.md) for
-`ci-repair-run` and the webhook. Reviewed plans remain available.
+replay image for `ci-repair-run` and the webhook. It never executes workflow
+content on the host.
 
 ## Inputs (all untrusted)
 

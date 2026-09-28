@@ -67,6 +67,15 @@ def check_archive(repo: Path, archive: Path, sha: str):
         raise ValueError("Archive omitted committed files; export-ignore is unsupported")
 
 
+def clean_head(repo: Path) -> str:
+    root = command(["git", "rev-parse", "--show-toplevel"], cwd=repo).decode().strip()
+    if Path(root).resolve() != repo.resolve():
+        raise ValueError("Expected repository root")
+    if command(["git", "status", "--porcelain", "--untracked-files=all"], cwd=repo):
+        raise ValueError("Repository must be clean")
+    return command(["git", "rev-parse", "HEAD"], cwd=repo).decode().strip()
+
+
 def snapshot(repo: Path, archive: Path) -> str:
     root = Path(command(["git", "rev-parse", "--show-toplevel"], cwd=repo).decode().strip())
     if root.resolve() != repo.resolve():

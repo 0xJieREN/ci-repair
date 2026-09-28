@@ -11,7 +11,6 @@ from pathlib import Path
 
 from ci_repair.agent import AgentExit, GateResult, RepairAgent, StopReason, final_stop_reason
 from ci_repair.context import failure_evidence
-from ci_repair.github import CollectionError, load_context
 from ci_repair.policy import Policy, Verdict, safe_prefix, within
 from ci_repair.workspace import PROBE_INDEX, command, extract_patch, snapshot, workspace
 
@@ -42,7 +41,6 @@ class Config:
     cost: float = 1.0
     wall_seconds: int = 600
     command_seconds: int = 60
-    ci_context: Path | None = None
     task: str = ""
 
     def validate(self):
@@ -64,9 +62,7 @@ def write_json(path: Path, value):
     path.write_text(json.dumps(value, indent=2, default=str) + "\n")
 
 
-def build_context(
-    config: Config, sha: str, log: str, ci: dict | None = None, policy: Policy | None = None
-) -> str:
+def build_context(config: Config, sha: str, log: str, policy: Policy | None = None) -> str:
     evidence = failure_evidence(log)
     return json.dumps(
         {
@@ -78,7 +74,6 @@ def build_context(
             **({"policy": policy.agent_summary(config.allowed_paths)} if policy else {}),
             "failure_log_untrusted": evidence.pop("raw_excerpt"),
             "failure_evidence_untrusted": evidence,
-            **({"github_actions_untrusted": ci} if ci is not None else {}),
         },
         indent=2,
     )
@@ -241,11 +236,7 @@ def run(
         archive = config.output / "source.tar"
         sha = snapshot(config.repo, archive)
         report["commit"] = sha
-        raw_log = config.failure_log.read_bytes()
-        ci = load_context(config.ci_context, sha, raw_log) if config.ci_context else None
-        if ci is not None:
-            report["github_actions"] = ci
-        log = raw_log.decode(errors="replace")
+        log = config.failure_log.read_bytes().decode(errors="replace")
         (config.output / "failure.log").write_text(log)
         phase = "environment"
         image = (
@@ -254,7 +245,7 @@ def run(
             .strip()
         )
         report["image_id"] = image
-        context = build_context(config, sha, log, ci, policy)
+        context = build_context(config, sha, log, policy)
         (config.output / "context.json").write_text(context + "\n")
         phase = "baseline"
         if baseline is None:
@@ -320,8 +311,6 @@ def run(
         report["error_phase"] = phase
         if isinstance(exc, RunDeadline):
             report["stop_reason"] = StopReason.WALL_TIME_LIMIT.value
-        elif phase == "inputs" and isinstance(exc, CollectionError):
-            report["stop_reason"] = StopReason.STALE_SOURCE.value
         else:
             report["stop_reason"] = StopReason.EXECUTION_ERROR.value
     finally:

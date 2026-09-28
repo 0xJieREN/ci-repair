@@ -252,18 +252,6 @@ def test_model_outside_policy_is_denied_before_any_work(tmp_path, monkeypatch):
     assert report["stop_reason"] == "POLICY_DENIED"
 
 
-def test_context_mismatch_is_stale_source_not_agent_failure(tmp_path, monkeypatch):
-    from dataclasses import replace
-
-    cfg = config(tmp_path)
-    manifest = tmp_path / "ci.json"
-    manifest.write_text(json.dumps({"schema_version": 1, "commit": "b" * 40}))
-    monkeypatch.setattr(pipeline, "snapshot", lambda *args: "a" * 40)
-    report = run(replace(cfg, ci_context=manifest), object())
-    assert report["stop_reason"] == "STALE_SOURCE"
-    assert report["error_phase"] == "inputs"
-
-
 @pytest.mark.parametrize(
     "regression,provided,phases",
     [("test-all", False, 4), ("test-one", False, 3), ("test-one", True, 2)],

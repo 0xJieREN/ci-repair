@@ -55,7 +55,7 @@ def publication(tmp_path, monkeypatch):
         },
     }
     (run / "patch.diff").write_bytes(patch)
-    (run / "report.json").write_text(json.dumps(report))
+    as_run_report(run, report)
     calls = []
     prs = []
 
@@ -217,48 +217,6 @@ def test_base_moving_during_push_stops_pr_creation(publication, monkeypatch):
     assert prs == []
 
 
-@pytest.mark.docker
-def test_real_verifier_report_can_be_prepared_and_published(publication, monkeypatch):
-    import hashlib
-    import os
-
-    if os.getenv("CI_REPAIR_DOCKER_TESTS") != "1":
-        pytest.skip("set CI_REPAIR_DOCKER_TESTS=1")
-    from test_docker import scripted_model
-
-    from ci_repair.pipeline import Config
-    from ci_repair.pipeline import run as repair
-
-    run_dir, out, remote, repo, report, calls, prs = publication
-    log = run_dir / "failure.log"
-    log.write_text("AssertionError: expected value 2")
-    metadata = {
-        **report["github_actions"],
-        "schema_version": 1,
-        "log_sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
-        "run_url": "https://github.com/owner/repo/actions/runs/7",
-        "event": "push",
-        "workflow": "CI",
-        "job_name": "test",
-        "failed_steps": ["unit"],
-    }
-    manifest = run_dir / "ci-context.json"
-    manifest.write_text(json.dumps(metadata))
-    cfg = Config(
-        repo,
-        log,
-        run_dir / "actual",
-        "ci-repair-demo:local",
-        "python -c 'from src.code import value; assert value == 2'",
-        "python -c 'from src.code import value; assert isinstance(value, int)'",
-        ci_context=manifest,
-    )
-    result = repair(cfg, scripted_model("printf 'value = 2\\n' > src/code.py"))
-    assert result["status"] == "PASS", result
-    pub.prepare(cfg.output, out, "main")
-    assert pub.publish(out) == "https://github.com/owner/repo/pull/1"
-
-
 ALLOW_POLICY = {
     "repositories": [{"name": "owner/repo", "branches": ["main"]}],
     "publication": {"draft_pr": "ALLOW"},
@@ -335,17 +293,17 @@ def test_auto_stops_at_review_without_remote_writes(
     assert not pushes(calls) and not prs and not out.exists()
 
 
-def test_manual_single_job_run_is_review_but_operator_publish_still_works(publication):
+def test_review_gate_leaves_publication_to_the_operator(publication):
     from ci_repair.policy import Policy
 
     run, out, remote, repo, report, calls, prs = publication
-    assert pub.auto(run, out, Policy(ALLOW_POLICY))["status"] == "REVIEW_REQUIRED"
-    plan = pub.prepare(run, out, "main", Policy(ALLOW_POLICY))
+    policy = Policy({**ALLOW_POLICY, "publication": {"draft_pr": "REVIEW"}})
+    assert pub.auto(run, out, policy)["status"] == "REVIEW_REQUIRED"
+    plan = pub.prepare(run, out, "main", policy)
     assert plan["gate"]["verdict"] == "REVIEW"
-    assert "environment configured manually" in plan["gate"]["reasons"]
     with pytest.raises(pub.PublicationError, match="REVIEW"):
-        pub.publish(out, Policy(ALLOW_POLICY), automatic=True)
-    assert pub.publish(out, Policy(ALLOW_POLICY)) == "https://github.com/owner/repo/pull/1"
+        pub.publish(out, policy, automatic=True)
+    assert pub.publish(out, policy) == "https://github.com/owner/repo/pull/1"
 
 
 def test_deny_blocks_prepare_and_policy_is_reevaluated_at_publish(publication):

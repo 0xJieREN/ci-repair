@@ -9,11 +9,12 @@ unsupported.
 
 A PR workflow may check out its branch head or GitHub's temporary merge commit.
 Do not assume that the run's head SHA or today's `refs/pull/N/merge` is what the
-failed job executed. Read the checkout step in the selected job's logs, then
-supply its exact 40-character SHA:
+failed jobs executed. The collector reads the checkout step of every failed job's
+log and uses the SHA only if all of them agree; otherwise supply the exact
+40-character SHA after reading the logs:
 
 ```sh
-uv run ci-repair-github OWNER/REPO RUN_ID --job-id JOB_ID \
+uv run ci-repair-github OWNER/REPO RUN_ID \
   --checkout-sha EXACT_TESTED_SHA --output runs/pr-import
 ```
 
@@ -26,18 +27,20 @@ fail closed. Specifying the checkout SHA is an operator assertion about what
 the job executed; the tool does not parse arbitrary checkout scripts or prove
 that a workflow used the default checkout.
 
-Repair with the existing `ci-repair --ci-context ...` command. Reports retain
-checkout kind, PR number, original head/base SHAs and branch names. Every new
+`ci-repair-run` repairs the collection. Reports retain checkout kind, PR number, original head/base SHAs and branch names. Every new
 repair report also records the SHA-256 digest of its exact patch.
 
 ## Prepare a reviewable repair PR
+
+`ci-repair-pr auto` runs these steps when the gate says ALLOW. For a `REVIEW`
+result, the operator runs them:
 
 ```sh
 uv run ci-repair-pr prepare runs/verified-repair \
   --base ORIGINAL_FAILED_BRANCH --output runs/publication
 ```
 
-Preparation requires an independently verified PASS report, passing original
+Preparation requires an independently verified PASS run report, passing original
 and regression checks for every addressed job, a matching nonempty patch digest
 and CI source provenance. It checks
 that the remote target branch still equals the verified SHA, then creates a
@@ -99,10 +102,8 @@ Sources checked 2026-09-18:
 `publication_gate` combines verified evidence with the current
 [policy](policy.md) into ALLOW / REVIEW / DENY. Inputs: patch categories and
 size, `publication.draft_pr`/`require_human_review`, the trigger allowlist for
-repository/event/branch, the stop reason, and, for orchestrated runs, each job's
+repository/event/branch, the stop reason, and, each job's
 environment status, architecture mismatch and baseline-vs-CI-log evidence.
-Manual single-job runs are always REVIEW because their environment was
-configured by hand.
 
 | Verdict | `prepare` | `publish` (operator) | `auto` |
 |---|---|---|---|

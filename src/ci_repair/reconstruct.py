@@ -16,12 +16,12 @@ import shlex
 import subprocess
 import time
 import tomllib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 
-from ci_repair.plan import WorkflowLoader, relative_directory, workflow_bytes
-from ci_repair.policy import Policy, Verdict
+from ci_repair.policy import Policy, Verdict, WorkflowLoader
+from ci_repair.workspace import command
 
 SUPPORTED, REVIEW, UNSUPPORTED = "SUPPORTED", "REVIEW_REQUIRED", "UNSUPPORTED"
 EXPR = re.compile(r"\$\{\{\s*(.*?)\s*\}\}", re.DOTALL)
@@ -621,6 +621,27 @@ def parse_log(log: str) -> dict:
     elif locations:
         result["python"] = locations[-1]
     return result
+
+
+def relative_directory(value: str) -> str:
+    path = PurePosixPath(value)
+    if not value or path.is_absolute() or ".." in path.parts or path.parts[:1] == (".git",):
+        raise ValueError("Working directory must stay inside the repository")
+    return str(path)
+
+
+def workflow_bytes(repo: Path, sha: str, path: str) -> bytes:
+    posix = PurePosixPath(path)
+    if (
+        posix.parts[:2] != (".github", "workflows")
+        or len(posix.parts) != 3
+        or posix.suffix not in (".yml", ".yaml")
+    ):
+        raise ValueError("Workflow must be a file under .github/workflows")
+    raw = command(["git", "show", f"{sha}:{path}"], cwd=repo)
+    if len(raw) > 256000:
+        raise ValueError("Workflow exceeds the supported size")
+    return raw
 
 
 def load_workflow(repo: Path, sha: str, path: str) -> tuple[dict, bytes]:

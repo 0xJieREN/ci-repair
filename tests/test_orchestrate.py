@@ -230,6 +230,10 @@ def test_single_job_run_reuses_its_verification_and_baseline(tmp_path):
         assert len(report["tests"]) == 2 and report["tests"][1]["same_as"] == "failing"
         repair = json.loads((output / "jobs/1/repair/report.json").read_text())
         assert repair["baseline_source"] == "provided"
+        # The reused evidence has the shape publication requires.
+        from ci_repair.publish import verified_run
+
+        assert verified_run(output)[0]["patch_sha256"] == report["patch_sha256"]
     finally:
         remove_images(report)
 

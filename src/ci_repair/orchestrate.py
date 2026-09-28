@@ -22,7 +22,6 @@ from ci_repair.context import evidence_overlap, failure_evidence
 from ci_repair.github import CollectionError, load_context
 from ci_repair.pipeline import Config, run_test, verify_patch, write_json
 from ci_repair.pipeline import run as run_pipeline
-from ci_repair.plan import clean_head
 from ci_repair.policy import Policy, PolicyError, Verdict, load_policy
 from ci_repair.reconstruct import (
     UNSUPPORTED,
@@ -31,7 +30,7 @@ from ci_repair.reconstruct import (
     reconstruct,
     replay_commands,
 )
-from ci_repair.workspace import command, snapshot, workspace
+from ci_repair.workspace import clean_head, command, snapshot, workspace
 
 BASELINE_UNREPRODUCED = (0, -1, 124, 126, 127, 137)
 GIT_IDENTITY = [
@@ -489,7 +488,7 @@ def first_failure(results: list[dict]) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("collection", type=Path, help="Output of ci-repair-github --all-jobs")
+    parser.add_argument("collection", type=Path, help="Output of ci-repair-github")
     parser.add_argument("--policy", type=Path, help="Operator policy YAML outside the repository")
     parser.add_argument("--model", help="Default: policy models.default")
     parser.add_argument("--model-class", choices=("litellm", "openrouter"), default="litellm")
@@ -508,7 +507,7 @@ def main():
         from dotenv import load_dotenv
 
         load_dotenv(args.env_file, override=True)
-    from ci_repair.cli import make_model
+    from ci_repair.model import make_model
 
     wall = int(policy.data["budget"]["max_wall_seconds"])
     output = (

@@ -44,6 +44,19 @@ def combine(*decisions: Decision) -> Decision:
     return Decision(verdict, reasons)
 
 
+class WorkflowLoader(yaml.SafeLoader):
+    """Ambiguous YAML keys must not silently replace earlier workflow settings."""
+
+    def construct_mapping(self, node, deep=False):
+        result = {}
+        for key_node, value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if key in result:
+                raise ValueError("Duplicate workflow key")
+            result[key] = self.construct_object(value_node, deep=deep)
+        return result
+
+
 class PolicyError(ValueError):
     """The policy file is malformed, untrusted or requests an unsupported relaxation."""
 
@@ -456,8 +469,6 @@ def load_policy(path: Path | None, *, untrusted_roots=()) -> Policy:
         if resolved.is_relative_to(Path(root).resolve()):
             raise PolicyError("Policy must not be read from a repository under repair")
     raw = resolved.read_bytes()
-    from ci_repair.plan import WorkflowLoader
-
     try:
         data = yaml.load(raw, Loader=WorkflowLoader)
     except (yaml.YAMLError, ValueError) as exc:

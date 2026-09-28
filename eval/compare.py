@@ -198,7 +198,7 @@ def trajectory_usage(run_dir: Path) -> dict:
 
 
 def run_ci_repair(prep: dict, trial: Path, build) -> dict:
-    from ci_repair.cli import make_model
+    from ci_repair.model import make_model
 
     run_dir = trial / "run"
     report = repair_run(

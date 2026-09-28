@@ -40,25 +40,19 @@ requires. Do not use the Colima-managed mode for a shared remote Docker daemon.
 - Real local Git commits, bare-remote pushes, creation-only branch behavior and
   publication retries. GitHub PR HTTP responses are controlled fixtures.
 
-A repaired target repository's verification already runs in local Docker via
-`ci-repair`: original failure first, then the explicitly configured regression
-command. Each verification command receives a separate fresh container with the
+A repaired job's verification runs in local Docker: original failing command
+first, then the regression command derived from the job's later steps. Each verification command receives a separate fresh container with the
 same original snapshot, patch and image; files and caches from the first check
 do not reach the second. When the regression command is the failing command
 itself (a failed step with no later steps), it runs once and its record is marked
-`same_as: failing`. Commands must include their own required setup. The same CLI runs on a Linux server. Its test dependencies must be in
-the supplied image; no GitHub-hosted runner is required. Prepared images now
-require GNU `timeout` in addition to Bash/Git (the demo image includes it).
+`same_as: failing`. The same commands run on a Linux server; no GitHub-hosted
+runner is required. Replay images need GNU `timeout` in addition to Bash/Git
+(the demo image includes it).
 
 The [automatic environment reconstruction](environment.md) handles a supported
-subset of workflows. The optional [replay-plan builder](replay-plan.md) extracts
-one static failed step for operator review. Neither path can reproduce arbitrary
-workflow YAML.
-
-For another repository, configure the original test command, regression command,
-image, working directory, dependency versions and necessary fixtures explicitly.
-Keep secrets out of repair containers. Tests needing external services need a
-separately designed trusted test setup; the default sandbox has no network.
+subset of workflows and cannot reproduce arbitrary workflow YAML. Secrets never
+reach repair containers, and the sandbox has no network, so tests that need
+external services cannot be replayed.
 
 ## Limits of local simulation
 

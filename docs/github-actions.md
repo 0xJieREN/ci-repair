@@ -8,12 +8,12 @@ repository commands, starts no container and makes no model calls.
 ## Current run-level path
 
 ```sh
-uv run ci-repair-github OWNER/REPO RUN_ID --all-jobs --output runs/import
+uv run ci-repair-github OWNER/REPO RUN_ID --output runs/import
 uv run ci-repair-run runs/import --policy ~/ci-repair-policy.yaml \
   --env-file .env --output runs/repair
 ```
 
-`--all-jobs` collects every job whose completed conclusion is `failure`, using
+Collection takes every job whose completed conclusion is `failure`, using
 one pinned checkout. The `run.json` manifest contains the attempt, source SHA,
 workflow path and each job's log and step metadata. Timed-out or cancelled jobs
 are recorded separately; they prevent a run-level PASS and publication. Existing
@@ -32,25 +32,6 @@ from the pinned workflow plus job metadata. It supports a deliberate subset of
 Actions syntax and marks uncertain or unsupported jobs for review; raw log text
 never becomes an executable command.
 
-## Operator-controlled single-job path
-
-```sh
-uv run ci-repair-github OWNER/REPO RUN_ID --job-id JOB_ID --output runs/job
-uv run ci-repair runs/job/repo --failure-log runs/job/failure.log \
-  --ci-context runs/job/ci-context.json --image YOUR_PREPARED_IMAGE \
-  --model deepseek/deepseek-flash --env-file .env \
-  --test 'YOUR_ORIGINAL_FAILING_COMMAND' \
-  --regression 'YOUR_REGRESSION_COMMAND' --allow src/ \
-  --output runs/job-repair
-```
-
-If just one job failed, omit `--job-id`. The explicit image and commands are
-operator inputs; do not copy executable strings from an untrusted log. The
-repair pipeline checks that the manifest commit matches the checkout and the
-log hash matches the collected file. Keep output outside the imported source
-checkout. On macOS, stop Colima after every local Docker experiment, including
-failures.
-
 ## Live collection fixture
 
 `.github/workflows/repair-fixture.yml` is a manual-only, intentionally failing
@@ -60,8 +41,7 @@ Dispatch it and inspect its run ID:
 ```sh
 gh workflow run repair-fixture.yml --repo 0xJieREN/ci-repair
 gh run list --repo 0xJieREN/ci-repair --workflow repair-fixture.yml
-uv run ci-repair-github 0xJieREN/ci-repair RUN_ID --all-jobs \
-  --output runs/github-smoke
+uv run ci-repair-github 0xJieREN/ci-repair RUN_ID --output runs/github-smoke
 ```
 
 The example policy allows only `examples/buggy/src/` for this repository. Local

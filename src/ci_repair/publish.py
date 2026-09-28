@@ -32,13 +32,16 @@ def verified_run(run_dir: Path) -> tuple[dict, bytes]:
         or any(t.get("returncode") != 0 or t.get("exception_info") for t in tests)
     ):
         raise PublicationError("Only independently verified PASS runs can be published")
-    if report.get("kind") == "run" and (
-        not report.get("jobs")
+    if (
+        report.get("kind") != "run"
+        or not report.get("jobs")
         or report.get("other_unsuccessful_jobs")
         or len(tests) != 2 * len(report["jobs"])
         or any(job.get("final_verification") != "PASS" for job in report["jobs"])
     ):
-        raise PublicationError("Every unsuccessful job needs final verification before publication")
+        raise PublicationError(
+            "Every unsuccessful job of a run needs final verification before publication"
+        )
     if not patch or report.get("patch_sha256") != digest(patch):
         raise PublicationError(
             "Patch is missing, changed, or from an older run without a digest; verify again"
@@ -83,9 +86,6 @@ def publication_gate(report: dict, patch: bytes, policy: Policy) -> Decision:
         decisions.append(Decision(Verdict.REVIEW, trigger.reasons))
     if report.get("stop_reason", "VERIFIED_PASS") != "VERIFIED_PASS":
         decisions.append(Decision(Verdict.REVIEW, (f"stop reason {report.get('stop_reason')}",)))
-    if report.get("kind") != "run":
-        # Manual single-job runs use operator-configured images and commands.
-        decisions.append(Decision(Verdict.REVIEW, ("environment configured manually",)))
     for job in report.get("jobs", []):
         name = job.get("job_name", "job")
         environment = job.get("environment") or {}

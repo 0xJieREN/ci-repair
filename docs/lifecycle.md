@@ -2,8 +2,9 @@
 
 This is the entry point for the automatic system introduced in v0.4. Details live in
 [policy](policy.md), [environment reconstruction](environment.md) and
-[PR publication](pull-requests.md). The earlier manual paths (`ci-repair`,
-`ci-repair-plan`, `ci-repair-pr prepare/publish`) still work unchanged.
+[PR publication](pull-requests.md). The manual single-job commands of v0.1–v0.4
+(`ci-repair`, `ci-repair-plan`) were removed in v0.6; `ci-repair-pr prepare/publish`
+remain as the operator's path for `REVIEW` results.
 
 ```text
 CI failure (workflow_run completed/failure)
@@ -32,7 +33,7 @@ after a local review. Those modules are reused, not replaced:
 |---|---|---|
 | Policy | `policy.py` (new) | Strict YAML, `ALLOW/REVIEW/DENY`, budgets, categories |
 | Stop decision | `agent.py` (new), `pipeline.py` | `RepairAgent` subclasses mini's loop; gate + probes |
-| Environment | `reconstruct.py` (new) | Uses `plan.py` loader/path helpers; builds images |
+| Environment | `reconstruct.py` (new) | Derives specs from workflows; builds images |
 | Collection | `github.py` | `collect_run`; `collect` shares the same helpers |
 | Multi-job | `orchestrate.py` (new) | Uses `pipeline.run` and `verify_patch` per job |
 | Publication | `publish.py` | `publication_gate`, `auto`; prepare/publish kept |
@@ -84,7 +85,7 @@ submissions, probes, estimated cost, command seconds, wall seconds).
 ## Multi-job runs
 
 ```sh
-uv run ci-repair-github OWNER/REPO RUN_ID --all-jobs --output runs/run-import
+uv run ci-repair-github OWNER/REPO RUN_ID --output runs/run-import
 uv run ci-repair-run runs/run-import --policy ~/ci-repair/policy.yaml --env-file .env
 uv run ci-repair-pr auto runs/run-<timestamp> --policy ~/ci-repair/policy.yaml \
   --output runs/publication
@@ -141,7 +142,7 @@ size, provenance, base branch movement and PR body hygiene. The Draft PR is the
 review interface. What still needs a human, and therefore yields `REVIEW`:
 changes to tests, lockfiles, dependency manifests or config; large or binary
 patches; approximated environments, architecture mismatch or a replayed
-failure that differs from the CI log; manual single-job runs; untrusted
+failure that differs from the CI log; untrusted
 repositories/branches; and any policy that requests review.
 
 One risk no deterministic check removes: pushing a repair branch runs the

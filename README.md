@@ -45,15 +45,15 @@ should require an operator. See [policy](docs/policy.md),
 The same run can be processed manually without the webhook:
 
 ```sh
-uv run ci-repair-github OWNER/REPO RUN_ID --all-jobs --output runs/import
+uv run ci-repair-github OWNER/REPO RUN_ID --output runs/import
 uv run ci-repair-run runs/import --policy ~/ci-repair-policy.yaml \
   --env-file .env --output runs/repair
 uv run ci-repair-pr auto runs/repair --policy ~/ci-repair-policy.yaml \
   --output runs/publication
 ```
 
-The original single-job `ci-repair` and review-only `ci-repair-plan` commands
-remain available for operator-controlled experiments. The
+When the gate says `REVIEW`, an operator approves with
+`ci-repair-pr prepare` and `ci-repair-pr publish` (see [publication](docs/pull-requests.md)). The
 [GitHub Actions guide](docs/github-actions.md) includes an intentionally failing
 fixture for a live collection smoke test.
 

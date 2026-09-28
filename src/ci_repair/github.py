@@ -27,20 +27,6 @@ def api(endpoint: str) -> bytes:
         ) from exc
 
 
-def select_job(jobs: list[dict], job_id: int | None) -> dict:
-    failed = [j for j in jobs if j["status"] == "completed" and j["conclusion"] == "failure"]
-    if job_id is not None:
-        failed = [j for j in failed if j["id"] == job_id]
-    if len(failed) != 1:
-        choices = ", ".join(
-            f"{j['id']} ({j['name']})" for j in jobs if j["conclusion"] == "failure"
-        )
-        raise CollectionError(
-            f"Select exactly one failed job with --job-id; candidates: {choices or 'none'}"
-        )
-    return failed[0]
-
-
 def resolve_source(repository: str, run: dict, checkout_sha: str | None) -> tuple[str, dict]:
     """PR checkout SHA is supplied from the selected job's checkout log, not today's merge ref."""
     event = run["event"]
@@ -179,30 +165,6 @@ def checkout_sha_from_log(log: bytes) -> str | None:
     return found.pop() if len(found) == 1 else None
 
 
-def collect(
-    repository: str,
-    run_id: int,
-    output: Path,
-    *,
-    job_id: int | None = None,
-    attempt: int | None = None,
-    checkout_sha: str | None = None,
-) -> dict:
-    if output.exists():
-        raise CollectionError("Output already exists; choose a new directory")
-    run, attempt = fetch_run(repository, run_id, attempt)
-    sha, source = resolve_source(repository, run, checkout_sha)
-    job = select_job(list_jobs(repository, run_id, attempt), job_id)
-    log = job_log(repository, run, run_id, job)
-    metadata = job_metadata(repository, run, run_id, attempt, sha, source, job, log)
-    output.mkdir(parents=True, mode=0o700)
-    # A failed collection remains inspectable but never gets a completion manifest.
-    (output / "failure.log").write_bytes(log)
-    clone_at(repository, output / "repo", sha)
-    (output / "ci-context.json").write_text(json.dumps(metadata, indent=2) + "\n")
-    return metadata
-
-
 def collect_run(
     repository: str,
     run_id: int,
@@ -294,37 +256,16 @@ def main():
     parser.add_argument("repository", help="owner/name on github.com")
     parser.add_argument("run_id", type=int)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--job-id", type=int)
-    parser.add_argument(
-        "--all-jobs", action="store_true", help="Collect every failed job for ci-repair-run"
-    )
     parser.add_argument("--attempt", type=int, help="Default: latest attempt at collection start")
     parser.add_argument(
-        "--checkout-sha", help="Exact SHA checked out by the PR job; required for PR events"
+        "--checkout-sha", help="Exact SHA checked out by the PR jobs, if the logs do not agree"
     )
     args = parser.parse_args()
-    if args.all_jobs:
-        if args.job_id:
-            parser.error("--all-jobs cannot be combined with --job-id")
-        try:
-            manifest = collect_run(
-                args.repository,
-                args.run_id,
-                args.output.resolve(),
-                attempt=args.attempt,
-                checkout_sha=args.checkout_sha,
-            )
-        except (CollectionError, subprocess.SubprocessError, OSError) as exc:
-            message = str(exc) if isinstance(exc, CollectionError) else type(exc).__name__
-            parser.exit(1, f"Collection failed: {message}\n")
-        print(f"Collected {len(manifest['jobs'])} failed jobs into {args.output}")
-        return 0
     try:
-        result = collect(
+        manifest = collect_run(
             args.repository,
             args.run_id,
             args.output.resolve(),
-            job_id=args.job_id,
             attempt=args.attempt,
             checkout_sha=args.checkout_sha,
         )
@@ -332,7 +273,5 @@ def main():
         # gh errors can contain auth details: expose controlled errors only.
         message = str(exc) if isinstance(exc, CollectionError) else type(exc).__name__
         parser.exit(1, f"Collection failed: {message}\n")
-    print(
-        f"Collected {result['repository']}@{result['commit']} job {result['job_id']} into {args.output}"
-    )
+    print(f"Collected {len(manifest['jobs'])} failed jobs into {args.output}")
     return 0

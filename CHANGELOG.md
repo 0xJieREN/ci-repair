@@ -35,7 +35,37 @@ measurements live in [eval/README.md](eval/README.md) and
 
 ## [Unreleased]
 
-Nothing yet.
+### Stage R1: remove the manual single-job path (2026-09-28)
+
+**Motivation.** Since 0.4.0 every product path (webhook, `ci-repair-run`, evaluation)
+goes through run-level collection, reconstruction and orchestration. The single-job
+commands needed an operator to supply the image and commands, could only be
+published after review, and no path or experiment used them any more, yet they kept
+their own CLI, plan format, context loading and publication branch.
+
+**Removed**
+- `ci-repair`, the single-job CLI with an operator-chosen image and commands, and
+  its `--plan` input.
+- `ci-repair-plan` and the reviewed replay-plan format (`docs/replay-plan.md`);
+  workflow reconstruction replaced it in 0.4.0.
+- Single-job collection (`ci-repair-github --job-id`). `ci-repair-github` always
+  collects every failed job of the attempt, so `--all-jobs` is gone.
+- Single-job CI context in `pipeline.run` (`Config.ci_context`) and the publication
+  branch for manual single-job reports; `ci-repair-pr` accepts run reports only.
+
+**Changed**
+- `make_model` moved to `ci_repair/model.py`, the strict YAML loader to `policy.py`,
+  the workflow path helpers to `reconstruct.py` and `clean_head` to `workspace.py`.
+- `ci-repair-pr prepare/publish` remain as the operator's path for `REVIEW` results.
+
+**Verification.** Full gate `scripts/check.sh --colima`: 240 passed. The collection
+tests that targeted the single-job collector now exercise `collect_run` (attempt
+pinning, pagination, unsupported runs, empty logs, no overwrite, PR merge
+provenance). The single-job Docker publication test was replaced by a check that a
+single-job *run* report built from reused evidence passes `verified_run`.
+
+**Known limits.** A workflow the reconstructor cannot replay can no longer be repaired
+with a hand-chosen image; it stays `UNSUPPORTED_ENVIRONMENT`.
 
 ## [0.5.0] — 2026-09-28 — replay on real workflows, agent comparison, lean verification
 
