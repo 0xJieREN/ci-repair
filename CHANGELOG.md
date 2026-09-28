@@ -31,9 +31,27 @@ measurements live in [eval/README.md](eval/README.md) and
 | 0.2.0 | 09-18 | `a1c0a34`…`df1ec51` | Import a real failed GitHub Actions job with provenance | Live fixture run imported and repaired (scripted model) |
 | 0.3.0 | 09-18 | `57ebfcd`…`64860c1` | Pinned PR provenance, patch digests, resumable draft PR publication | 53 tests; publication against real bare remotes |
 | 0.4.0 | 09-18…09-22 | `09afeb6`…`74c0d04` | Hardening, evaluation harnesses, then the automatic lifecycle: policy, stop gate, reconstruction, multi-job, webhook | Paired synthetic, historical and LCA pilots |
-| 0.5.0 | 09-23…09-28 | `a0a3377`…`v0.5.0` | Scope focus, live acceptance, replay fidelity on a real dataset, paired comparison with Pi, orchestration and verification efficiency | Live webhook→draft PR; 39/68 LCA tasks usable; 234 + 21 paired trials |
+| 0.5.0 | 09-23…09-28 | `a0a3377`…`v0.5.0` | Scope focus, live acceptance, replay fidelity on a real dataset, paired comparison with Pi, orchestration and verification efficiency | Live webhook→draft PR; 39/68 LCA tasks usable; 234 + 21 paired trials; −54% wall time from lean verification (76 valid trials) |
 
 ## [Unreleased]
+
+### Stage R2: evaluation harness robustness (2026-09-28)
+
+**Motivation.** Round 3 (run `36399826597`) lost 41 of 117 trials to an exhausted
+provider balance. The harness scored them as failed repairs, and a rerun would have
+skipped them because they had a result.
+
+**Fixed**
+- An exception out of an agent loop (a CI Repair job report with status `ERROR` in
+  phase `agent`, or a Pi error other than the turn-limit abort) is an infrastructure
+  error: reported under Errors, never scored, and retried on the next invocation.
+
+**Changed**
+- Node and Pi are installed and required only when the `pi` arm runs;
+  `experiment.jsonl` records the arms.
+
+**Verification.** Lint and the unit gate; the harness itself has no automated tests.
+The rerun of the 18 affected tasks exercises it.
 
 ### Stage R1: remove the manual single-job path (2026-09-28)
 
@@ -105,10 +123,13 @@ one 88 s command ran six times for a 3-call repair.
 **Verification.** Full gate `scripts/check.sh --colima`: 255 passed, including a new
 Docker test for a single-job run that reuses its baseline and verification and
 unit tests for identical checks and a provided baseline. Replaying the recorded
-round-1 durations under these rules estimates a mean of 108 s instead of 227 s,
-a p90 of 346 s instead of 761 s, and 53% less CI Repair wall time overall; multi-job
-tasks go from 385 s to 224 s on average. This is an **estimate from recorded
-timings**, not a new measurement.
+round-1 durations under these rules estimated 53% less CI Repair wall time (mean
+108 s instead of 227 s). Hosted round 3 (run `36399826597`, commit `7ab19ca`)
+measured it on the 76 trials not hit by an exhausted provider balance, paired with
+round 1: wall time fell 54% (median 48 → 30 s, mean 137 → 63 s, p90 432 → 186 s),
+model calls were unchanged, and 73 passed against 71. The other 41 trials are invalid
+and their 18 tasks need a rerun; see
+[eval/README.md](eval/README.md#round-3-verification-without-redundant-reruns-partial-2026-09-28).
 
 **Known limits.** A job reused this way is no longer rerun a second time, so the final
 verification is not a flakiness retry. Probes are still synchronous, and the agent is

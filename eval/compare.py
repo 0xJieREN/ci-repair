@@ -208,6 +208,11 @@ def run_ci_repair(prep: dict, trial: Path, build) -> dict:
         policy=policy(),
         build=build,
     )
+    for path in run_dir.glob("jobs/*/*/report.json"):
+        job = json.loads(path.read_text())
+        # An exception out of the agent loop is a provider or transport failure, not a repair.
+        if job.get("status") == "ERROR" and job.get("error_phase") == "agent":
+            raise RuntimeError(f"model provider error: {job.get('error_type')}")
     patch = run_dir / "patch.diff"
     return {
         "patch": patch.read_bytes() if patch.exists() else b"",
@@ -306,6 +311,10 @@ def run_pi(prep: dict, trial: Path) -> dict:
             tokens["completion"] += usage.get("output", 0)
             tokens["reasoning"] += usage.get("reasoning", 0)
             stop = message.get("stopReason")
+            # The turn limit aborts with "error" too; any other error is the provider's.
+            aborted = "aborted" in str(message.get("errorMessage", ""))
+            if stop == "error" and not aborted:
+                raise RuntimeError(f"model provider error: {message.get('errorMessage', '')}")
     return {
         "patch": patch,
         "own_verdict": None,  # Pi does not claim verification
@@ -363,7 +372,10 @@ def trial(prep: dict, arm: str, repetition: int, directory: Path, build) -> dict
     trial_dir = directory / arm / str(repetition)
     result_file = trial_dir / "result.json"
     if result_file.exists():
-        return json.loads(result_file.read_text())
+        result = json.loads(result_file.read_text())
+        if result.get("passed") is not None:
+            return result
+        shutil.rmtree(trial_dir)  # an infrastructure error is retried, never scored
     trial_dir.mkdir(parents=True, exist_ok=False)
     started = time.monotonic()
     try:
@@ -410,7 +422,7 @@ def run_task(row, output: Path, repetitions: int, build, keep_images: bool, arms
             subprocess.run(["docker", "image", "rm", "-f", job["tag"]], capture_output=True)
 
 
-def record_experiment(output: Path, ids: list[int], repetitions: int):
+def record_experiment(output: Path, ids: list[int], repetitions: int, arms: tuple[str, ...]):
     """What produced these results; appended per invocation so resumed runs stay traceable."""
     from importlib.metadata import version
 
@@ -423,7 +435,8 @@ def record_experiment(output: Path, ids: list[int], repetitions: int):
             ["git", "status", "--porcelain", "--", "src", "eval"], cwd=root, capture_output=True
         ).stdout
     )
-    pi = json.loads((PI / "node_modules/@earendil-works/pi-coding-agent/package.json").read_text())
+    pi_package = PI / "node_modules/@earendil-works/pi-coding-agent/package.json"
+    pi = json.loads(pi_package.read_text())["version"] if pi_package.exists() else None
     entry = {
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "commit": commit or None,
@@ -437,7 +450,8 @@ def record_experiment(output: Path, ids: list[int], repetitions: int):
         },
         "repetitions": repetitions,
         "tasks": ids,
-        "versions": {"mini-swe-agent": version("mini-swe-agent"), "pi": pi["version"]},
+        "arms": list(arms),
+        "versions": {"mini-swe-agent": version("mini-swe-agent"), "pi": pi},
     }
     with (output / "experiment.jsonl").open("a") as stream:
         stream.write(json.dumps(entry) + "\n")
@@ -501,7 +515,10 @@ def main():
         load_dotenv(args.env_file, override=True)
     if not os.environ.get("DEEPSEEK_API_KEY"):
         raise SystemExit("DEEPSEEK_API_KEY is required (use --env-file)")
-    if not PI_CLI.exists():
+    arms = tuple(a for a in args.arms.split(",") if a in ARMS)
+    if not arms:
+        raise SystemExit(f"--arms must name at least one of {', '.join(ARMS)}")
+    if "pi" in arms and not PI_CLI.exists():
         raise SystemExit("Install Pi first: cd eval/pi && pnpm install --frozen-lockfile")
     args.output.mkdir(parents=True, exist_ok=True)
     rows = {row["id"]: row for row in dataset(args.parquet, args.output)}
@@ -509,7 +526,7 @@ def main():
     if not ids:
         raise SystemExit("--tasks is required")
 
-    record_experiment(args.output, ids, args.repetitions)
+    record_experiment(args.output, ids, args.repetitions, arms)
 
     def build(spec, archive, out, pol):
         return build_environment(
@@ -519,7 +536,6 @@ def main():
     for task_id in ids:
         row = rows[task_id]
         try:
-            arms = tuple(a for a in args.arms.split(",") if a in ARMS)
             run_task(row, args.output, args.repetitions, build, args.keep_images, arms)
         except Exception as exc:  # noqa: BLE001 - keep going; the task is reported as an error
             write_json(

@@ -100,7 +100,10 @@ to the original tree and requires every failed job's failing and regression
 commands to pass in fresh containers, and the patch policy not to deny it; an
 arm's own verdict is only recorded. Cost is computed for both from provider token
 counts with `config/deepseek-pricing.json`. Each invocation appends its commit,
-versions and budgets to `experiment.jsonl`; finished trials are skipped on rerun.
+versions and budgets to `experiment.jsonl`; scored trials are skipped on rerun. An
+exception out of an agent loop (provider or transport failure, such as an exhausted
+account balance) makes the trial an infrastructure error: it is reported under
+Errors, never scored, and retried on the next invocation.
 
 ```sh
 uv run --with pyarrow python eval/compare.py --output runs/compare --env-file .env \
@@ -167,6 +170,37 @@ trials serve as the comparison. 21 trials, no infrastructure errors.
 - Combining round 2 with round 1 for the 32 unchanged tasks gives CI Repair about
   111/117 against Pi's 113/117. The remaining gap is 45 (2/3, budget-bound) and
   53 (2/3). This mixes two commits, so it is an estimate, not a fresh full run.
+
+### Round 3: verification without redundant reruns, partial (2026-09-28)
+
+Hosted run [36399826597](https://github.com/0xJieREN/ci-repair/actions/runs/36399826597),
+commit `7ab19ca` (includes `7cee58c`: an identical regression check runs once, the
+first repair reuses the run's baseline, and final verification reuses evidence for an
+unchanged tree). CI Repair only, all 39 tasks × 3 repetitions.
+
+The DeepSeek account ran out of balance during the run. 41 trials received
+`Insufficient Balance` from the provider and were scored as failures by the harness of
+that commit; they are **invalid** (the harness now treats them as infrastructure
+errors). Every task with an invalid trial needs a rerun:
+25, 26, 27, 29, 33, 35, 45, 53, 60, 96, 127, 128, 129, 130, 140, 142, 158, 160.
+
+Comparison on the 76 valid trials, paired by task and repetition with round 1:
+
+| Same 76 trials | CI Repair round 1 (`8cd5bce`) | CI Repair round 3 (`7ab19ca`) | Pi round 1 |
+|---|---:|---:|---:|
+| Passed | 71 | 73 | 76 |
+| Time per trial, median / mean / p90 | 48 / 137 / 432 s | 30 / 63 / 186 s | 18 / 49 / 98 s |
+| Model calls, median (mean) | 4 (7.4) | 4 (7.7) | 7 (8.7) |
+| Estimated cost, mean per trial | $0.0049 | $0.0044 | $0.0053 |
+
+- Total CI Repair wall time fell by 54%, matching the 53% estimated from round 1's
+  recorded timings. Model calls did not change, as expected: the change touches only
+  deterministic verification.
+- Success did not regress. The two extra passes are multi-job task 57 (0/3 → 3/3,
+  from `e64f527`); the three failures are 45 and 53 at the step limit, as before.
+- On the 7 valid multi-job trials the mean time fell from 462 s to 156 s.
+- The valid subset is biased towards tasks that ran before the balance ran out; it
+  excludes the slowest repositories entirely. Pi's time still excludes grading.
 
 ## Pi tool routing
 
