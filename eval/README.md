@@ -211,6 +211,35 @@ All 117 trials, paired by task and repetition with round 1:
   passed two more trials. Pi's time still excludes grading, while CI Repair's
   includes its own verification. Task 160 fails in every arm.
 
+### Round 4: baseline alongside the agent (2026-09-28)
+
+Hosted run [36415596025](https://github.com/0xJieREN/ci-repair/actions/runs/36415596025),
+commit `2c9af64` (S1, `82090ad`: the pipeline replays the baseline in its own container
+while the agent starts; the gate waits for it before verifying anything). CI Repair
+only, all 39 tasks × **1** repetition, to save cost: the saving is measured per job
+from `baseline.json` and `baseline_wait_seconds` and does not need paired repetitions.
+No provider errors.
+
+| 39 trials | CI Repair round 3, repetition 1 | CI Repair round 4 | Pi round 1, repetition 1 |
+|---|---:|---:|---:|
+| Passed | 36 | 37 | 38 |
+| Time per trial, median / mean / p90 | 46 / 101 / 273 s | 42 / 100 / 241 s | 25 / 66 / 206 s |
+| Model calls, mean | 8.3 | 10.3 | 10.2 |
+
+- Measured directly on the 43 pipeline baselines: the baseline command took 30.1 s
+  per trial and the pipeline still waited 19.3 s for it, so 10.8 s per trial (36% of
+  the baseline) now overlaps the agent. The estimate was at most 36 s. The agent
+  usually writes its first patch within a few calls, before the baseline finishes,
+  and the gate then waits for it.
+- The run-level baseline now runs only after earlier repairs (3.2 s per trial).
+- Total time did not measurably change (3,930 → 3,886 s). With one repetition this
+  cannot resolve 10 s: the three repetitions of round 3 alone totaled 3,930, 4,522
+  and 4,070 s, and round 4 made 2 more calls per trial (task 53 alone: 24 → 60 calls
+  over its jobs), which the change cannot cause.
+- Passes moved both ways: 45 and 158 passed, although they failed in round 3's first
+  repetition, and 53 failed. Both failures (53, 160) stopped at the step limit. Task
+  26 passed the grader but CI Repair itself reported `PARTIAL` at the step limit.
+
 ## Pi tool routing
 
 `pi/docker-tools.ts` lets the [Pi](https://github.com/earendil-works/pi) coding
