@@ -32,11 +32,11 @@ measurements live in [eval/README.md](eval/README.md).
 | 0.4.0 | 09-18…09-22 | `09afeb6`…`74c0d04` | Hardening, evaluation harnesses, then the automatic lifecycle: policy, stop gate, reconstruction, multi-job, webhook | Paired synthetic, historical and LCA pilots |
 | 0.5.0 | 09-23…09-28 | `a0a3377`…`v0.5.0` | Scope focus, live acceptance, replay fidelity on a real dataset, paired comparison with Pi, orchestration and verification efficiency | Live webhook→draft PR; 39/68 LCA tasks usable; 234 + 21 paired trials; −53% wall time from lean verification (round 3, 117 trials) |
 | 0.6.0 | 09-28 | `4504d62`…`v0.6.0` | Remove the manual single-job path; evaluation never scores provider failures; past results in one place | Full gate 240 passed; round 3 completed by a rerun with no provider errors |
-| Unreleased | 09-28 | — | Baseline alongside the agent | Full gate 246 passed; saving not yet measured |
+| Unreleased | 09-28 | `82090ad`… | Baseline alongside the agent | Full gate 246 passed; saving not yet measured |
 
 ## [Unreleased]
 
-### Stage S1: baseline alongside the agent (2026-09-28)
+### Stage S1: baseline alongside the agent (2026-09-28, `82090ad`)
 
 **Motivation.** After lean verification (U4), round 3 of the Pi comparison (117
 trials; runs `36399826597` and `36405797931`) spent 107 s per CI Repair trial on
