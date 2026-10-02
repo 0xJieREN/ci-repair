@@ -36,7 +36,7 @@ measurements live in [eval/README.md](eval/README.md).
 
 ## [Unreleased]
 
-### Stage E2: why trials fail (2026-10-02)
+### Stage E2: why trials fail (2026-10-02, `d5ecf86`)
 
 **Motivation.** After E1 the pass counts can be trusted, but the failures were known
 only by their stop reason: `STEP_LIMIT`. A stop reason is not a cause, and the next
