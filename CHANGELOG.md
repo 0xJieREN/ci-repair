@@ -36,7 +36,7 @@ measurements live in [eval/README.md](eval/README.md).
 
 ## [Unreleased]
 
-### Stage P1: write the repair instead of searching for it (2026-10-02)
+### Stage P1: write the repair instead of searching for it (2026-10-02, `5427d2a`)
 
 **Motivation.** E2 traced 16 of 19 failed trials to one behaviour: the agent finds
 the failing location, then spends its 30 calls looking for another version of the
