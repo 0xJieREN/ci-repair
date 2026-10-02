@@ -323,3 +323,55 @@ def test_a_job_broken_by_a_later_repair_gets_one_fix_up(tmp_path):
         assert "value = 1" in (output / "candidate/src/app.py").read_text()
     finally:
         remove_images(report)
+
+
+def fix_up_fixture(tmp_path, monkeypatch, spent_calls):
+    from ci_repair import orchestrate
+    from ci_repair.pipeline import Config
+
+    cfg = Config(
+        repo=tmp_path,
+        failure_log=tmp_path / "failure.log",
+        output=tmp_path / "jobs/1/repair",
+        image="image",
+        failing_command="check",
+        regression_command="check",
+        steps=30,
+        cost=1.0,
+        wall_seconds=600,
+    )
+    (tmp_path / "jobs/1").mkdir(parents=True)
+    seen = []
+
+    def pipeline(config, model, policy):
+        seen.append(config)
+        return {"status": "FAIL", "usage": {"model_calls": 4, "wall_seconds": 20.0}}
+
+    monkeypatch.setattr(orchestrate, "run_pipeline", pipeline)
+    result = {"job_id": 1, "job_name": "lint", "config": cfg}
+    usage = {
+        "model_calls": spent_calls,
+        "estimated_cost_usd": 0.25,
+        "agent_steps": 0,
+        "wall_seconds": 1000.0,
+        "models_used": set(),
+    }
+    total = {"steps": 60, "cost": 2.0, "wall_seconds": 1200}
+    orchestrate.fix_up(
+        result, [result], tmp_path, tmp_path, tmp_path / "patch.diff", "HEAD", lambda: None,
+        Policy({}), usage, total,
+    )  # fmt: skip
+    return result, usage, seen
+
+
+def test_fix_up_spends_only_what_the_repairs_left(tmp_path, monkeypatch):
+    result, usage, seen = fix_up_fixture(tmp_path, monkeypatch, spent_calls=50)
+    assert (seen[0].steps, seen[0].cost, seen[0].wall_seconds) == (10, 1.0, 200)
+    assert usage["model_calls"] == 54 and usage["wall_seconds"] == 1020.0
+    assert result["fixup"]["repair_status"] == "FAIL"
+
+
+def test_fix_up_is_skipped_when_the_run_budget_is_spent(tmp_path, monkeypatch):
+    result, usage, seen = fix_up_fixture(tmp_path, monkeypatch, spent_calls=60)
+    assert not seen and usage["model_calls"] == 60
+    assert result["fixup"] == {"repair_status": "SKIPPED_BUDGET", "verified": False}

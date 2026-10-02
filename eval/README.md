@@ -97,9 +97,15 @@ Both use `deepseek/deepseek-flash` with the provider's default thinking (enabled
 Pi sends no effort level for this model), 30 model calls and 1200 s per failed job
 (Pi's session gets the sum), and 600 s per command. Grading applies the final patch
 to the original tree and requires every failed job's failing and regression
-commands to pass in fresh containers, and the patch policy not to deny it; an
-arm's own verdict is only recorded. Cost is computed for both from provider token
-counts with `config/deepseek-pricing.json`. Each invocation appends its commit,
+commands to pass in fresh containers, and the patch policy not to deny it. Each
+result records four things separately: `checks_passed`, the arm's own verdict
+(`own_accepted`, recorded and never trusted), the patch policy verdict
+(`patch_policy`), and `auto_publishable`: checks passed, policy `ALLOW` and every
+job environment `SUPPORTED`. The last is an upper bound, because a deployment's
+trigger and publication rules apply on top. Cost is computed for both from provider
+token counts with `config/deepseek-pricing.json`, over every repair and fix-up
+trajectory. CI Repair's fix-up draws on what the repairs left of the run's budget
+(the per-job budget times the jobs attempted), the same total Pi's session gets. Each invocation appends its commit,
 versions and budgets to `experiment.jsonl`; scored trials are skipped on rerun. An
 exception out of an agent loop (provider or transport failure, such as an exhausted
 account balance) makes the trial an infrastructure error: it is reported under
@@ -239,6 +245,54 @@ No provider errors.
 - Passes moved both ways: 45 and 158 passed, although they failed in round 3's first
   repetition, and 53 failed. Both failures (53, 160) stopped at the step limit. Task
   26 passed the grader but CI Repair itself reported `PARTIAL` at the step limit.
+
+## What a pass means: audit against upstream fixes (2026-10-02)
+
+The grader runs checks that live in the repository, and an agent may edit them: in
+round 3, 34 of CI Repair's 111 passing patches change test files. A pass alone
+therefore does not show that a check was repaired and not weakened. `audit.py` asks
+an independent question of every passing patch, using the upstream fix the dataset
+records for each task (`reference.diff` from `lca_replay.py`), which no agent sees:
+does the patch change only files the upstream fix also changed, does it add more
+suppression markers (`skip`, `xfail`, `noqa`, `type: ignore`, `pragma: no cover`)
+than upstream, and does it remove more assertions than it adds? It runs on recorded
+results; no model or container is used.
+
+```sh
+uv run python eval/audit.py --references runs/lca-replay runs/compare-a runs/compare-b
+```
+
+| Passing patches | CI Repair round 1 | CI Repair round 3 | CI Repair round 4 | Pi round 1 |
+|---|---:|---:|---:|---:|
+| Passed | 107 | 111 | 37 | 113 |
+| Same files as upstream | 81 | 85 | 28 | 85 |
+| Proper subset of upstream's files | 26 | 26 | 9 | 27 |
+| Any file upstream did not change | 0 | 0 | 0 | 1 |
+| Edits tests | 32 | 34 | 12 | 35 |
+| Edits a test file upstream left alone | 0 | 0 | 0 | 0 |
+| More suppressions than upstream | 0 | 0 | 0 | 1 |
+| Removes more assertions than it adds | 0 | 0 | 0 | 0 |
+
+Runs: round 1 `36149891145`, round 3 `36399826597` + `36405797931`, round 4
+`36415596025`; references from replay run `36124065326`.
+
+- Every passing CI Repair patch stays within the files of the upstream fix, and
+  every test edit is to a test file the upstream fix edited too: where an agent
+  changed a test, the maintainers' own fix changed that test as well.
+- The one flagged patch is Pi's on task 53, repetition 2: it passed by changing two
+  other extractor files and adding one suppression marker.
+- Separating the verdicts for round 3: 111 passed the checks and CI Repair accepted
+  the same 111; the patch policy says `ALLOW` for 74 and `REVIEW` for 37 (34 for
+  test edits); 44 are also in a `SUPPORTED` environment, the upper bound for
+  automatic draft PRs. Pi round 1: 113 / 75 / 45.
+- Fix-up trajectories were missing from the cost of earlier rounds: one trial in
+  round 3 ($0.0028, 0.4% of the round's total), three in round 2 ($0.0069) and one
+  in round 4 ($0.0020), recomputed from the recorded usage. The tables above are
+  unchanged at their precision.
+
+Limits: the audit compares file sets and two line-level signals, not behaviour. A
+patch inside the upstream file set can still be wrong in a way the selected checks
+miss, and jobs that passed in the original run are not replayed.
 
 ## Pi tool routing
 

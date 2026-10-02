@@ -135,6 +135,7 @@ def prepare(row: dict, directory: Path, build) -> dict:
                 "job": entry["job"],
                 "step": spec["source"]["step_name"],
                 "job_key": spec["source"].get("job_key"),
+                "environment": spec["status"],
                 "spec": spec,
                 "failing": failing,
                 "regression": regression,
@@ -183,7 +184,7 @@ def prepare(row: dict, directory: Path, build) -> dict:
 def trajectory_usage(run_dir: Path) -> dict:
     """Token usage from mini trajectories (provider-reported, per model response)."""
     totals = collections.Counter()
-    for path in run_dir.glob("jobs/*/repair/trajectory.json"):
+    for path in run_dir.glob("jobs/*/*/trajectory.json"):  # repairs and fix-ups
         for message in json.loads(path.read_text()).get("messages", []):
             usage = (message.get("extra", {}).get("response") or {}).get("usage") or {}
             if not usage:
@@ -217,6 +218,7 @@ def run_ci_repair(prep: dict, trial: Path, build) -> dict:
     return {
         "patch": patch.read_bytes() if patch.exists() else b"",
         "own_verdict": report.get("status"),
+        "own_accepted": bool(report.get("verified")),
         "stop_reason": report.get("stop_reason"),
         "model_calls": report.get("usage", {}).get("model_calls", 0),
         "tokens": trajectory_usage(run_dir),
@@ -318,6 +320,7 @@ def run_pi(prep: dict, trial: Path) -> dict:
     return {
         "patch": patch,
         "own_verdict": None,  # Pi does not claim verification
+        "own_accepted": None,
         "stop_reason": exit_code if exit_code != 0 else stop,
         "model_calls": calls,
         "tokens": dict(tokens),
@@ -351,9 +354,14 @@ def grade(prep: dict, patch: bytes, trial: Path) -> dict:
         changed = verdict.get("changed_files") or changed
         results[job["job"]] = verdict["status"]
     decision = policy().check_patch(changed, patch, (".",))
-    passed = all(s == "PASS" for s in results.values()) and decision.verdict is not Verdict.DENY
+    checks_passed = all(s == "PASS" for s in results.values())
+    supported = all(job.get("environment") == "SUPPORTED" for job in prep["jobs"])
     return {
-        "passed": passed,
+        "passed": checks_passed and decision.verdict is not Verdict.DENY,
+        "checks_passed": checks_passed,
+        "patch_policy": decision.verdict.value,
+        # An upper bound: a deployment's trigger and publication rules apply on top.
+        "auto_publishable": checks_passed and decision.verdict is Verdict.ALLOW and supported,
         "jobs": results,
         "policy": decision.to_dict(),
         "changed_files": changed,
@@ -463,8 +471,9 @@ def summarize(output: Path) -> str:
     for r in results:
         by_arm[r["arm"]].append(r)
     lines = [
-        "| Arm | Trials | Passed | Errors | Mean calls | Mean cost USD | Mean seconds |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| Arm | Trials | Passed | Own accepted | Policy ALLOW | Auto-publishable | Errors "
+        "| Mean calls | Mean cost USD | Mean seconds |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for arm in ARMS:
         rs = by_arm.get(arm, [])
@@ -472,8 +481,18 @@ def summarize(output: Path) -> str:
         if not rs:
             continue
         mean = lambda key: sum(r.get(key) or 0 for r in scored) / max(len(scored), 1)  # noqa: E731
+        count = lambda test: sum(bool(test(r)) for r in scored)  # noqa: E731
+        passed = [r for r in scored if r["passed"]]
+        # Results recorded before these fields existed keep the verdict under "policy".
+        allow = sum(
+            (r.get("patch_policy") or (r.get("policy") or {}).get("verdict")) == "ALLOW"
+            for r in passed
+        )
+        own = "—" if arm == "pi" else count(lambda r: r.get("own_verdict") == "PASS")
+        known = all("auto_publishable" in r for r in passed)
+        publishable = count(lambda r: r.get("auto_publishable")) if known else "—"
         lines.append(
-            f"| {arm} | {len(rs)} | {sum(bool(r['passed']) for r in scored)} | "
+            f"| {arm} | {len(rs)} | {len(passed)} | {own} | {allow} | {publishable} | "
             f"{len(rs) - len(scored)} | {mean('model_calls'):.1f} | {mean('cost_usd'):.4f} | "
             f"{mean('agent_seconds'):.0f} |"
         )

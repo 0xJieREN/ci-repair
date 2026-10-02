@@ -254,7 +254,13 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
     cumulative = output / "patch.diff"
     cumulative.write_bytes(b"")
     effective = policy.budget({})["effective"]
-    usage = {"model_calls": 0, "estimated_cost_usd": 0.0, "agent_steps": 0, "models_used": set()}
+    usage = {
+        "model_calls": 0,
+        "estimated_cost_usd": 0.0,
+        "agent_steps": 0,
+        "wall_seconds": 0.0,
+        "models_used": set(),
+    }
     repaired_names: list[str] = []
     attempted = 0
     results = []
@@ -332,9 +338,7 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
         # Without earlier repairs the candidate is the original tree, so the pipeline's
         # baseline, run alongside the agent, is this job's baseline.
         repair = run_pipeline(replace(cfg, task=task), model_factory(), policy)
-        for key in ("model_calls", "estimated_cost_usd", "agent_steps"):
-            usage[key] += repair.get("usage", {}).get(key, 0)
-        usage["models_used"].update(repair.get("usage", {}).get("models_used", []))
+        add_usage(usage, repair)
         result.update(repair_status=repair["status"], stop_reason=repair.get("stop_reason"))
         record = cfg.output / "baseline.json"
         if not prior and record.exists():
@@ -391,10 +395,24 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
 
     tests = verify_all("verification", addressed) if cumulative.read_bytes() else []
     regressed = [r for r in addressed if r["status"] == "REGRESSED"]
+    # The run's budget is the per-job budget times the jobs attempted; a fix-up spends only
+    # what the repairs left of it.
+    total = {key: effective[key] * attempted for key in SPENT}
     for result in regressed:
         # A later repair broke this job. One bounded fix-up on the combined change, seeing
         # the job's current failure; the final verification below still decides.
-        fix_up(result, addressed, output, candidate, cumulative, base, model_factory, policy, usage)
+        fix_up(
+            result,
+            addressed,
+            output,
+            candidate,
+            cumulative,
+            base,
+            model_factory,
+            policy,
+            usage,
+            total,
+        )
     if any(r["fixup"]["verified"] for r in regressed):
         for result in regressed:
             if result["fixup"]["verified"]:
@@ -420,8 +438,29 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
     return report
 
 
-def fix_up(result, addressed, output, candidate, cumulative, base, model_factory, policy, usage):
+SPENT = {"steps": "model_calls", "cost": "estimated_cost_usd", "wall_seconds": "wall_seconds"}
+
+
+def add_usage(usage: dict, repair: dict):
+    for key in ("model_calls", "estimated_cost_usd", "agent_steps", "wall_seconds"):
+        usage[key] += repair.get("usage", {}).get(key, 0)
+    usage["models_used"].update(repair.get("usage", {}).get("models_used", []))
+
+
+def fix_up(
+    result, addressed, output, candidate, cumulative, base, model_factory, policy, usage, total
+):
     cfg = result["config"]
+    left = {key: total[key] - usage[spent] for key, spent in SPENT.items()}
+    if left["steps"] < 1 or left["cost"] <= 0 or left["wall_seconds"] < 1:
+        result["fixup"] = {"repair_status": "SKIPPED_BUDGET", "verified": False}
+        return
+    cfg = replace(
+        cfg,
+        steps=min(cfg.steps, int(left["steps"])),
+        cost=min(cfg.cost, left["cost"]),
+        wall_seconds=min(cfg.wall_seconds, int(left["wall_seconds"])),
+    )
     job_dir = output / "jobs" / str(result["job_id"])
     current = output / "verification" / str(result["job_id"])
     records = [
@@ -445,9 +484,7 @@ def fix_up(result, addressed, output, candidate, cumulative, base, model_factory
         model_factory(),
         policy,
     )
-    for key in ("model_calls", "estimated_cost_usd", "agent_steps"):
-        usage[key] += repair.get("usage", {}).get(key, 0)
-    usage["models_used"].update(repair.get("usage", {}).get("models_used", []))
+    add_usage(usage, repair)
     result["fixup"] = {
         "repair_status": repair["status"],
         "stop_reason": repair.get("stop_reason"),

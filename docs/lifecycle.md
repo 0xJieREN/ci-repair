@@ -110,7 +110,9 @@ checks already passed on exactly that tree applied to the original snapshot in i
 image (a single-job run, or no later change); `verification_source` then names that
 evidence. A job broken by a
 later repair becomes `REGRESSED` and gets **one** fix-up attempt on the combined
-change, with its current failure as the log. Only if a fix-up verifies are the jobs
+change, with its current failure as the log. The fix-up spends only what the
+repairs left of the run's budget (the per-job calls, cost and wall time times the
+jobs attempted) and is skipped (`SKIPPED_BUDGET`) when nothing is left. Only if a fix-up verifies are the jobs
 verified again; a job that is still broken keeps `REGRESSED` and the run fails.
 Run status: `PASS` (every failed job
 verified), `PARTIAL`, `FAIL`, `UNSUPPORTED_ENVIRONMENT`, `PATCH_REJECTED`,
@@ -167,7 +169,7 @@ branch workflows have minimal permissions and no sensitive secrets.
   runners, multiple toolchains.
 - Repository-local policy files (a PR could edit its own rules); submodules,
   LFS; history after the failing commit is never kept in a replay image.
-- Automatic retries, run-level budgets across jobs beyond `repair.max_jobs`,
+- Automatic retries, moving unused budget from one job's repair to another's,
   distributed workers, App token minting, notifications.
 
 ## What has and has not been exercised

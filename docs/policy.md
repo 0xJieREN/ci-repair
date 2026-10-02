@@ -30,6 +30,7 @@ the permissive legacy rules (paths and file modes only).
 | `budget.max_model_calls` | 30 | one mini step is one model call |
 | `budget.max_cost_usd` | 1.0 | estimated; upstream checks between calls |
 | `budget.max_wall_seconds` / `max_command_seconds` | 600 / 60 | per repair attempt / per command |
+| (run total) | — | calls, cost and wall time times the jobs attempted; a fix-up spends only the remainder |
 | `budget.max_setup_seconds` | 900 | environment build |
 | `patch.allowed_paths` | `["."]` | used when no repository entry overrides it |
 | `patch.max_changed_files` | review 5, deny 20 | |

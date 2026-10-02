@@ -32,9 +32,61 @@ measurements live in [eval/README.md](eval/README.md).
 | 0.4.0 | 09-18…09-22 | `09afeb6`…`74c0d04` | Hardening, evaluation harnesses, then the automatic lifecycle: policy, stop gate, reconstruction, multi-job, webhook | Paired synthetic, historical and LCA pilots |
 | 0.5.0 | 09-23…09-28 | `a0a3377`…`v0.5.0` | Scope focus, live acceptance, replay fidelity on a real dataset, paired comparison with Pi, orchestration and verification efficiency | Live webhook→draft PR; 39/68 LCA tasks usable; 234 + 21 paired trials; −53% wall time from lean verification (round 3, 117 trials) |
 | 0.6.0 | 09-28 | `4504d62`…`v0.6.0` | Remove the manual single-job path; evaluation never scores provider failures; past results in one place | Full gate 240 passed; round 3 completed by a rerun with no provider errors |
-| Unreleased | 09-28 | `82090ad`… | Baseline alongside the agent | Full gate 246 passed; 10.8 s of baseline per trial overlapped (round 4, 39 trials × 1) |
+| Unreleased | 09-28…10-02 | `82090ad`… | Baseline alongside the agent; a checkable evaluation contract | 10.8 s of baseline per trial overlapped (round 4, 39 trials × 1); all 111 passing patches of round 3 stay within the upstream fix's files |
 
 ## [Unreleased]
+
+### Stage E1: an evaluation contract that can be checked (2026-10-02)
+
+**Motivation.** A review of the code and the recorded runs found four places where
+the comparison's numbers said less than they seemed to. Cost summed only
+`jobs/*/repair` trajectories, so fix-up calls were counted but not priced. A fix-up
+started with a full per-job budget on top of the repairs', while Pi's session is
+capped at the per-job budget times the jobs. One `passed` flag stood for three
+different things: checks passing, the system accepting, and a patch being
+publishable without review. And the grader runs checks the agent may edit: 34 of
+round 3's 111 passing patches change test files, so a pass alone does not show the
+check was repaired and not weakened.
+
+**Changed**
+- A run's budget is the per-job budget (calls, cost, wall time) times the jobs
+  attempted. A fix-up gets the smaller of the per-job budget and what the repairs
+  left, and is skipped with `fixup.repair_status: SKIPPED_BUDGET` when nothing is
+  left. Run reports add `usage.wall_seconds`, the time spent in repair pipelines.
+- `eval/compare.py` prices every trajectory under a job (repair and fix-up), and
+  records `checks_passed`, `own_accepted`, `patch_policy` and `auto_publishable`
+  (checks passed, policy `ALLOW`, every environment `SUPPORTED`; an upper bound)
+  in each result. The summary table has a column for each.
+- The README opens with what the project adds to the agent loop, a diagram and the
+  results table with its limits.
+
+**Added**
+- `eval/audit.py` compares each passing patch with the dataset's upstream fix, which
+  no agent sees: the files changed, suppression markers added and assertions removed.
+
+**Verification.** Full gate `scripts/check.sh --colima`: 248 passed. Two
+new unit tests cover a fix-up limited to the remaining budget and one skipped when
+the budget is spent. The audit ran on the recorded results (rounds 1, 3 and 4;
+references from replay run `36124065326`), with no new inference:
+- All 111 passing CI Repair patches of round 3 change only files the upstream fix
+  changed (85 the same set, 26 a subset); all 34 that edit tests edit test files
+  upstream edited too; none adds suppressions beyond upstream or removes assertions
+  on net. Rounds 1 (107) and 4 (37) are the same. Pi round 1: 112 of 113; one patch
+  on task 53 changes other files and adds a suppression.
+- Round 3 separated: 111 checks passed, 111 accepted by CI Repair, 74 policy `ALLOW`,
+  44 also in a `SUPPORTED` environment.
+- Unpriced fix-ups, recomputed from recorded usage (estimates from the pricing file):
+  $0.0028 in round 3 (0.4% of its total), $0.0069 in round 2, $0.0020 in round 4.
+  Published means are unchanged at their precision.
+- None of the 348 recorded CI Repair trials exceeded the new call budget, so earlier
+  results stand.
+
+**Known limits.** The audit compares file sets and two line-level signals, not
+behaviour; a patch within the upstream files can still be wrong where the selected
+checks do not look. Jobs that passed in the original run are still not replayed.
+Budget left by one job's repair is not available to another job's repair, only to a
+fix-up. The new result fields have not yet been produced by a hosted run; the round 3
+figures above were derived from the recorded `policy` field and the coverage audit.
 
 ### Stage S1: baseline alongside the agent (2026-09-28, `82090ad`)
 
