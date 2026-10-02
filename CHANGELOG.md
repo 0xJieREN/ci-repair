@@ -36,6 +36,41 @@ measurements live in [eval/README.md](eval/README.md).
 
 ## [Unreleased]
 
+### Stage P1: write the repair instead of searching for it (2026-10-02)
+
+**Motivation.** E2 traced 16 of 19 failed trials to one behaviour: the agent finds
+the failing location, then spends its 30 calls looking for another version of the
+code and never edits. Every such session mentions the commit hash in the task
+context, which the workspace cannot resolve; on task 158 the agent calls it "the
+fix commit".
+
+**Changed**
+- The task context no longer carries `commit`. The run report still records it.
+- The system prompt states that the workspace is the only copy of the code and that
+  the repair has to be written there.
+- If no file has changed after 10 model calls, the agent gets one reminder to make
+  the smallest change at the failing location and test it. The session report
+  records `nudged`. The check runs once, at the tenth call.
+
+**Verification.** Full gate `scripts/check.sh --colima`: 250 passed. New unit tests
+cover a session nudged once and a session that has edited and is not.
+
+Hypothesis and decision rule, written before the paid run. Development tasks 45, 53,
+158 and 160, CI Repair only, 3 repetitions (12 trials), same model and budget as
+round 3. On these tasks round 3 passed 6 of 12 (45: 2/3, 53: 3/3, 158: 1/3,
+160: 0/3) with 6 `NO_PATCH` job sessions.
+- Supported: at least 9 of 12 pass and at most 3 job sessions end `NO_PATCH`.
+- Refuted: 6 or fewer pass.
+- Otherwise inconclusive at this sample size; task 53 alone has moved between 1/3
+  and 3/3 across rounds with no change to the agent.
+The run also reports how many sessions were nudged and what they did next.
+
+**Known limits.** The three changes are tested together, so a result cannot be
+attributed to one of them. These four tasks are the ones the behaviour was found on:
+a pass here is a development result, not evidence of generalization, and the other
+35 tasks have not been rerun for regressions. The threshold of 10 calls is a choice,
+not a measurement: passing sessions under 15 calls average 5.3.
+
 ### Stage E2: why trials fail (2026-10-02, `d5ecf86`)
 
 **Motivation.** After E1 the pass counts can be trusted, but the failures were known

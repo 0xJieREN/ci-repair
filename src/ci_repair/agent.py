@@ -90,17 +90,30 @@ def _exit(reason: AgentExit, content: str = "") -> dict:
     }
 
 
+NUDGE = (
+    "You have used {calls} of {limit} model calls and no file in the workspace has changed. "
+    "No other version of this code is available: not in Git history, package caches or the "
+    "network. Make the smallest change at the failing location now, run the failing command, "
+    "and revise from its output."
+)
+
+
 class RepairAgent(DefaultAgent):
     def __init__(
         self,
         *args,
         gate: Callable[[str], GateResult],
+        unchanged: Callable[[], bool] | None = None,
+        nudge_after: int = 10,
         early_stop: bool = True,
         max_rejected_submissions: int = 2,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.gate = gate
+        self.unchanged = unchanged
+        self.nudge_after = nudge_after
+        self.nudged = False
         self.early_stop = early_stop
         self.max_rejected_submissions = max_rejected_submissions
         self.steps_executed = 0
@@ -143,6 +156,13 @@ class RepairAgent(DefaultAgent):
         messages = self.add_messages(
             *self.model.format_observation_messages(message, outputs, self.get_template_vars())
         )
+        if self.unchanged and self.n_calls >= self.nudge_after:
+            # Asked once: a session that has only read by now tends to keep searching.
+            if self.unchanged():
+                self.nudged = True
+                text = NUDGE.format(calls=self.n_calls, limit=self.config.step_limit)
+                messages += self.add_messages(self.model.format_message(role="user", content=text))
+            self.unchanged = None
         if self.early_stop:
             result = self.gate("probe")
             if result.accept:

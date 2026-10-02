@@ -234,3 +234,34 @@ def test_probe_budget_is_capped(tmp_path, monkeypatch):
     assert gate("probe").accept is False  # cap reached, no verifier run
     assert gate("submit").accept is True  # explicit submissions are always checked
     assert len(verified) == 2
+
+
+def test_session_that_has_changed_nothing_is_nudged_once():
+    checks = []
+
+    def unchanged():
+        checks.append(True)
+        return True
+
+    a = agent(
+        ["echo 1", "echo 2", "echo 3", "echo 4"],
+        Gate(),
+        unchanged=unchanged,
+        nudge_after=2,
+        step_limit=4,
+    )
+    a.run("task")
+    nudges = [m for m in a.messages if "no file in the workspace has changed" in json.dumps(m)]
+    assert a.nudged and len(nudges) == 1 and len(checks) == 1
+    assert "2 of 4 model calls" in json.dumps(nudges[0])
+    # The reminder follows the second call's observation and precedes the third call.
+    assert a.messages.index(nudges[0]) < len(a.messages) - 2
+
+
+def test_session_that_has_edited_is_not_nudged():
+    a = agent(
+        ["echo 1", "echo 2", "echo 3"], Gate(), unchanged=lambda: False, nudge_after=2, step_limit=3
+    )
+    a.run("task")
+    assert not a.nudged
+    assert not any("no file in the workspace" in json.dumps(m) for m in a.messages)

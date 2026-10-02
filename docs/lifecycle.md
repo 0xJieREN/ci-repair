@@ -57,6 +57,10 @@ make a run `PASS`. The agent never decides that a repair succeeded.
   digest). When it passes, the system stops the agent immediately, so a correct
   patch cannot be overwritten and no further model calls are spent. Probes use a
   throwaway Git index, so the agent's own `git diff` view is unaffected.
+- **One reminder to edit.** If no file has changed after 10 model calls, the agent
+  is told once that no other version of the code is available and to change the
+  failing location (`nudged` in the report). The task context carries no commit
+  hash, because the workspace cannot resolve it.
 - **Limits** are reported separately: step, cost and wall time.
 
 `agent_exit` records why the loop ended: `SUBMITTED`, `SUBMITTED_NO_PATCH`,

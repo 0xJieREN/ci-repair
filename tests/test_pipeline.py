@@ -14,6 +14,7 @@ from ci_repair.workspace import snapshot
 class FakeAgent:
     n_calls, cost, steps_executed, submissions, rejected_submissions = 0, 0, 0, 0, 0
     command_seconds = 0.0
+    nudged = False
 
     def __init__(self, *args, **kwargs):
         pass
@@ -37,10 +38,11 @@ def config(tmp_path):
 
 
 def test_context_is_bounded_and_does_not_template_log(tmp_path):
-    result = build_context(config(tmp_path), "abc", "x" * 20000 + "{{ secret }}")
+    result = build_context(config(tmp_path), "x" * 20000 + "{{ secret }}")
     assert len(result) < 17000
     assert "{{ secret }}" in result
-    assert json.loads(result)["commit"] == "abc"
+    # A commit hash the workspace cannot resolve sends the agent looking for it.
+    assert "commit" not in json.loads(result)
 
 
 @pytest.mark.parametrize(
