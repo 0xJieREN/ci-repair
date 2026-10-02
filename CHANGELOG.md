@@ -36,7 +36,7 @@ measurements live in [eval/README.md](eval/README.md).
 
 ## [Unreleased]
 
-### Stage E1: an evaluation contract that can be checked (2026-10-02)
+### Stage E1: an evaluation contract that can be checked (2026-10-02, `d500884`)
 
 **Motivation.** A review of the code and the recorded runs found four places where
 the comparison's numbers said less than they seemed to. Cost summed only
