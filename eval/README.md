@@ -353,7 +353,54 @@ What this supports and what it does not: the remaining failures are not about
 verification, feedback or multi-job orchestration, and a larger budget alone turns
 some of them into late passes (Pi on 53). Whether telling the agent that no other
 version exists, or interrupting a session that has not changed a file, turns the
-search into an edit is a hypothesis; it has not been run.
+search into an edit was a hypothesis; the next section tests it.
+
+### The intervention, measured (2026-10-02)
+
+Commit `5427d2a` removes the commit hash from the task context, states in the system
+prompt that the workspace is the only copy of the code, and reminds a session once
+if no file has changed after 10 model calls. Hosted run `36970961464` (commit
+`bf9f92c`): tasks 45, 53, 158 and 160, CI Repair only, 3 repetitions, same model and
+budget. The comparison is round 3 on the same tasks (run `36405797931`).
+
+| Task | Round 3 | With the intervention |
+|---|---:|---:|
+| 45 | 2/3 | 2/3 |
+| 53 | 3/3 | 3/3 |
+| 158 | 1/3 | 3/3 |
+| 160 | 0/3 | 0/3 |
+| Total | 6/12 | 8/12 |
+| `NO_PATCH` job sessions | 6 | 5 |
+| Mean model calls per trial | 26.5 | 25.2 |
+| Mean seconds per trial | 366 | 357 |
+| Estimated cost, 12 trials | $0.317 | $0.319 |
+
+The rule written before the run asked for at least 9 passes and at most 3 `NO_PATCH`
+sessions to call the hypothesis supported, and 6 or fewer passes to call it refuted.
+8 passes and 5 sessions is neither: **inconclusive**.
+
+- The whole difference is task 158, which passed in 12, 15 and 15 calls with the
+  upstream one-line test change, against one pass in 22 calls in round 3. Three
+  trials against three do not separate this from run-to-run variation; task 53 has moved
+  between 1/3 and 3/3 across rounds with no change to the agent.
+- All 13 job sessions received the reminder, the 8 that passed included: no session
+  on these tasks edits within 10 calls. On 158 the edit followed the reminder within
+  two to seven commands. On 160 it did not follow at all.
+- The search did not stop. All 5 `NO_PATCH` sessions still looked through Git
+  history (3.4 commands each, 4.5 before), now using the checkout's own hashes, and
+  4 looked for copies elsewhere.
+- Task 160 is a different failure from the one E2 described. The upstream fix
+  changes four lines of a test that compares against tick labels. The agent
+  reproduces the failure, reads the plotting code for a defect that is not there,
+  and never considers that the test is the wrong side. Telling it to edit does not
+  tell it what to edit.
+- Task 53, repetition 3 passed the grader with a 27-call repair of one job while
+  the other job's session ended `NO_PATCH`, so the run reported `PARTIAL`. This is
+  the gap seen on task 26 in round 4: a job whose repair failed is not rechecked
+  against the final patch.
+
+Not shown: any effect on the other 35 tasks, which were not rerun, and which of the
+three changes matters.
 
 ## Pi tool routing
 

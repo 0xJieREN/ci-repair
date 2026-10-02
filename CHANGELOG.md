@@ -32,7 +32,7 @@ measurements live in [eval/README.md](eval/README.md).
 | 0.4.0 | 09-18…09-22 | `09afeb6`…`74c0d04` | Hardening, evaluation harnesses, then the automatic lifecycle: policy, stop gate, reconstruction, multi-job, webhook | Paired synthetic, historical and LCA pilots |
 | 0.5.0 | 09-23…09-28 | `a0a3377`…`v0.5.0` | Scope focus, live acceptance, replay fidelity on a real dataset, paired comparison with Pi, orchestration and verification efficiency | Live webhook→draft PR; 39/68 LCA tasks usable; 234 + 21 paired trials; −53% wall time from lean verification (round 3, 117 trials) |
 | 0.6.0 | 09-28 | `4504d62`…`v0.6.0` | Remove the manual single-job path; evaluation never scores provider failures; past results in one place | Full gate 240 passed; round 3 completed by a rerun with no provider errors |
-| Unreleased | 09-28…10-02 | `82090ad`… | Baseline alongside the agent; a checkable evaluation contract; failure analysis | 10.8 s of baseline per trial overlapped (round 4, 39 trials × 1); all 111 passing patches of round 3 stay within the upstream fix's files; 16 of 19 failures are one behaviour |
+| Unreleased | 09-28…10-02 | `82090ad`… | Baseline alongside the agent; a checkable evaluation contract; failure analysis; a prompt intervention against it | 10.8 s of baseline per trial overlapped (round 4, 39 trials × 1); all 111 passing patches of round 3 stay within the upstream fix's files; 16 of 19 failures are one behaviour; the intervention is inconclusive (8/12 against 6/12 on 4 tasks, run `36970961464`) |
 
 ## [Unreleased]
 
@@ -64,6 +64,18 @@ round 3. On these tasks round 3 passed 6 of 12 (45: 2/3, 53: 3/3, 158: 1/3,
 - Otherwise inconclusive at this sample size; task 53 alone has moved between 1/3
   and 3/3 across rounds with no change to the agent.
 The run also reports how many sessions were nudged and what they did next.
+
+**Result: inconclusive.** Hosted run `36970961464` (commit `bf9f92c`, 12 trials):
+8 of 12 passed (45: 2/3, 53: 3/3, 158: 3/3, 160: 0/3) with 5 `NO_PATCH` job
+sessions, against 6 of 12 and 6 in round 3. Neither threshold was met. The gain is
+task 158 alone (1/3 → 3/3, in 12 to 15 calls instead of 22), which three trials do
+not separate from variation. All 13 job sessions were reminded, including the 8
+that passed; the 5 that failed kept searching Git history after it. Task 160 fails
+for another reason: the fix belongs in a test and the agent looks for a defect in
+the source. Mean calls (25.2 against 26.5), time and cost did not change. Task 53
+repetition 3 passed the grader but was reported `PARTIAL`, the gap already seen in
+round 4. Details in
+[eval/README.md](eval/README.md#the-intervention-measured-2026-10-02).
 
 **Known limits.** The three changes are tested together, so a result cannot be
 attributed to one of them. These four tasks are the ones the behaviour was found on:
