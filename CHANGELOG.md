@@ -32,9 +32,37 @@ measurements live in [eval/README.md](eval/README.md).
 | 0.4.0 | 09-18…09-22 | `09afeb6`…`74c0d04` | Hardening, evaluation harnesses, then the automatic lifecycle: policy, stop gate, reconstruction, multi-job, webhook | Paired synthetic, historical and LCA pilots |
 | 0.5.0 | 09-23…09-28 | `a0a3377`…`v0.5.0` | Scope focus, live acceptance, replay fidelity on a real dataset, paired comparison with Pi, orchestration and verification efficiency | Live webhook→draft PR; 39/68 LCA tasks usable; 234 + 21 paired trials; −53% wall time from lean verification (round 3, 117 trials) |
 | 0.6.0 | 09-28 | `4504d62`…`v0.6.0` | Remove the manual single-job path; evaluation never scores provider failures; past results in one place | Full gate 240 passed; round 3 completed by a rerun with no provider errors |
-| Unreleased | 09-28…10-02 | `82090ad`… | Baseline alongside the agent; a checkable evaluation contract | 10.8 s of baseline per trial overlapped (round 4, 39 trials × 1); all 111 passing patches of round 3 stay within the upstream fix's files |
+| Unreleased | 09-28…10-02 | `82090ad`… | Baseline alongside the agent; a checkable evaluation contract; failure analysis | 10.8 s of baseline per trial overlapped (round 4, 39 trials × 1); all 111 passing patches of round 3 stay within the upstream fix's files; 16 of 19 failures are one behaviour |
 
 ## [Unreleased]
+
+### Stage E2: why trials fail (2026-10-02)
+
+**Motivation.** After E1 the pass counts can be trusted, but the failures were known
+only by their stop reason: `STEP_LIMIT`. A stop reason is not a cause, and the next
+change to the agent should follow from what the failed sessions did.
+
+**Added**
+- `eval/trajectories.py` counts, per recorded job session, commands that search Git
+  internals or copies outside the workspace instead of editing.
+
+**Verification.** All 19 failed CI Repair trials of rounds 1 to 4 were traced (runs
+`36149891145`, `36246418676`, `36399826597`, `36405797931`, `36415596025`); no new
+inference. Three were the cross-job regression on task 57 that `e64f527` fixed (7/7
+since). The other 16 ended at the step limit with no change in the tree, on tasks 160
+(7), 53 (4), 158 (3) and 45 (2). In all 26 such job sessions the agent located the
+failure and then searched for another version of the code: 25 searched Git history
+(4.5 commands per session) and 23 searched for copies (5.7), against 0.1 and 0.2 in
+the 268 passing sessions under 15 calls. Pi's four failures show the same behaviour
+with the same model. Details in
+[eval/README.md](eval/README.md#why-trials-fail-2026-10-02).
+
+**Known limits.** The counts use coarse command patterns and four sessions were read
+in full; the rest were classified by the counts. The cause of the search is not
+established. The task context names a commit the workspace cannot resolve, which
+every `NO_PATCH` session mentions, but Pi searches without it. One trial (task 26,
+round 4) shows a separate gap: a job whose repair failed is not checked against the
+final patch, so a run a later repair completed is reported `PARTIAL`.
 
 ### Stage E1: an evaluation contract that can be checked (2026-10-02, `d500884`)
 

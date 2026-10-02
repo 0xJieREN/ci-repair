@@ -294,6 +294,67 @@ Limits: the audit compares file sets and two line-level signals, not behaviour. 
 patch inside the upstream file set can still be wrong in a way the selected checks
 miss, and jobs that passed in the original run are not replayed.
 
+## Why trials fail (2026-10-02)
+
+Every failed trial of the four rounds was traced back to its trajectories. No new
+inference; `trajectories.py` reproduces the counts from recorded runs.
+
+```sh
+uv run python eval/trajectories.py runs/compare-a runs/compare-b
+```
+
+| Failed CI Repair trials | Trials | Tasks | Cause | State |
+|---|---:|---|---|---|
+| A later job's repair broke an earlier one | 3 | 57 | orchestration | fixed by the fix-up (`e64f527`); 7/7 since |
+| Step limit with no change in the tree | 16 | 160 (7), 53 (4), 158 (3), 45 (2) | agent | open |
+
+One further trial (task 26, round 4) passed the grader while CI Repair reported
+`PARTIAL`: the first job's session ended at the step limit, the second job's repair
+also fixed the first, and a job whose repair failed is not checked against the final
+patch.
+
+The 16 open failures are one behaviour. In the sessions read in full (45, 53, 158,
+160), the agent reads the failing location within its first three commands and then
+never edits. It looks for another version of the code instead: Git internals, package
+caches, wheels, the snapshot archive, the network, and on task 53 the environment and
+filesystem for a patch file. Its reasoning says so; on task 158 it inspects `.pyc`
+files in case they were compiled from the fixed source. The upstream fix was one line
+on 158, four on 160 and six deleted import lines on 53, each at the location the agent
+had already read.
+
+All job sessions of the five recorded runs, provider errors excluded:
+
+| Session outcome | Sessions | Mean calls | Searched history | Commands per session | Searched for copies | Commands per session |
+|---|---:|---:|---:|---:|---:|---:|
+| `NO_PATCH` | 26 | 30.0 | 25 | 4.5 | 23 | 5.7 |
+| `PASS`, 15 or more calls | 38 | 20.7 | 27 | 1.7 | 31 | 2.3 |
+| `PASS`, under 15 calls | 268 | 5.3 | 20 | 0.1 | 52 | 0.2 |
+
+"Searched history" matches Git plumbing and history beyond the checkout (`reflog`,
+`fsck`, `cat-file`, `rev-list`, `.git/` internals); "searched for copies" matches
+package caches, wheels, `find /`, the snapshot archive and network tools. The
+patterns are in `trajectories.py`; they are coarse and also match some ordinary
+commands, which is why short passing sessions are not at zero.
+
+- The behaviour belongs to the model, not to one harness. Pi's four failures (158
+  once, 160 three times) show it too: no edit, 6 to 13 such commands each. Where Pi
+  passes 45 and 53 it searches the same way first and edits late, within a session
+  budget of 30 to 60 calls; CI Repair's sessions on 53 are two separate 30-call
+  sessions that each repeat the search.
+- CI Repair's task context names the run's commit, while the workspace history shows
+  only the checkout and a local `baseline` commit. All 26 `NO_PATCH` sessions refer
+  to that unresolvable hash in their reasoning (85 of 306 passing sessions do), and
+  on 158 the agent calls it "the fix commit". Pi's prompt has no such hash and Pi
+  searches anyway, so this is at most a contributing cue.
+- Nothing in the container holds the fix: the archive and probe index are the
+  failing snapshot, and the network is off. The search costs calls, not validity.
+
+What this supports and what it does not: the remaining failures are not about
+verification, feedback or multi-job orchestration, and a larger budget alone turns
+some of them into late passes (Pi on 53). Whether telling the agent that no other
+version exists, or interrupting a session that has not changed a file, turns the
+search into an edit is a hypothesis; it has not been run.
+
 ## Pi tool routing
 
 `pi/docker-tools.ts` lets the [Pi](https://github.com/earendil-works/pi) coding
