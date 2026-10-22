@@ -36,7 +36,7 @@ measurements live in [eval/README.md](eval/README.md).
 
 ## [Unreleased]
 
-### Stage D1: README, developer guide and entry-point docstrings (2026-10-22)
+### Stage D1: README, developer guide and entry-point docstrings (2026-10-22, `8a395b8`)
 
 **Motivation.** The README described what the system does and its results, but not
 why it exists, how one job's repair is isolated, what was traded away, or what it
@@ -59,7 +59,7 @@ the new README sections is in `eval/README.md` or `eval/results/reproduced.md`.
 
 **Known limits.** The roadmap lists intentions, not measured work.
 
-### Stage E3: the evaluation record recomputed from archived evidence (2026-10-22)
+### Stage E3: the evaluation record recomputed from archived evidence (2026-10-22, `9d4aa96`)
 
 **Motivation.** Every number in `eval/README.md` came from hosted runs whose
 artifacts GitHub deletes after 90 days. The scripts that computed them read the
@@ -110,7 +110,7 @@ compares table rows, not the numbers quoted in prose; `reproduced.md` lists thos
 figures for review. No paid run was made, so `FIXED_BY_LATER` (`464a741`) is
 untested against real tasks.
 
-### Stage R1: private tracebacks, progress logs and typed signatures (2026-10-22)
+### Stage R1: private tracebacks, progress logs and typed signatures (2026-10-22, `246503b`)
 
 **Motivation.** A failed run recorded only the exception type. That protects the
 shared report, because provider and GitHub errors can echo credentials, but it
@@ -157,7 +157,7 @@ function: its phases share the candidate repository, the cumulative patch and th
 budget, so splitting it would need a state object that adds code without removing
 any.
 
-### Stage F4: changed lines that look like file headers are counted (2026-10-22)
+### Stage F4: changed lines that look like file headers are counted (2026-10-22, `6c6257b`)
 
 **Motivation.** `patch_stats` skipped every line starting with `---` or `+++` to leave
 out file headers. Inside a hunk such a line is a removed `-- ...` line (an SQL or
@@ -178,7 +178,7 @@ decision changes. `scripts/check.sh --unit`: 268 passed.
 **Known limits.** A patch without hunk headers now counts zero changed lines; every
 patch the system checks comes from `git diff --binary`.
 
-### Stage F3: generated output in subdirectories is classified as generated (2026-10-22)
+### Stage F3: generated output in subdirectories is classified as generated (2026-10-22, `dff15ea`)
 
 **Motivation.** The `generated` category (DENY by default) listed `dist/*`, `build/*`,
 `vendor/*` and `node_modules/*`. A pattern containing `/` is matched against the whole
@@ -200,7 +200,7 @@ directory, so no recorded grade changes. `scripts/check.sh --unit`: 267 passed.
 (for example `src/build/`) is now DENY by default, as a root-level one already was.
 An operator can relax `patch.categories.generated` to REVIEW.
 
-### Stage F2: a job failing only in a later step after earlier repairs gets its agent (2026-10-22)
+### Stage F2: a job failing only in a later step after earlier repairs gets its agent (2026-10-22, `349cc2b`)
 
 **Motivation.** A job with earlier repairs was checked on the original source, then
 repaired on the candidate, where the pipeline ran the failing command again as its
@@ -227,7 +227,7 @@ verification now checks a distinct regression command, as `verify_patch` does.
 reading the code. These sessions no longer stop early on an unreproduced baseline;
 for them that stop could only fire on a step that an earlier repair already fixed.
 
-### Stage F1: a job a later repair fixed is no longer reported unrepaired (2026-10-22)
+### Stage F1: a job a later repair fixed is no longer reported unrepaired (2026-10-22, `464a741`)
 
 **Motivation.** E2 found one trial (task 26, round 4) that passed the grader but
 was reported `PARTIAL`: the first job's agent failed, the second job's repair fixed
@@ -250,7 +250,7 @@ before the fix. A session that errors before its baseline stays `REPAIR_FAILED`.
 **Known limits.** Not rerun on task 26 itself; the claim rests on the test that
 reproduces its shape. A failed check costs one more container run per unrepaired job.
 
-### Stage T1: the run loop tested without Docker (2026-10-22)
+### Stage T1: the run loop tested without Docker (2026-10-22, `8f5d0da`)
 
 **Motivation.** Without Docker the unit gate covered 63% of `orchestrate.py`. The
 run loop's branches (a job fixed by an earlier repair, a failed fix-up, the job
