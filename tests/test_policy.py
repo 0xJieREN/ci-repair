@@ -4,7 +4,7 @@ import pytest
 
 from ci_repair.policy import Policy, PolicyError, Verdict, categorize, load_policy
 
-PATCH = b"--- a/src/a.py\n+++ b/src/a.py\n-x = 1\n+x = 2\n"
+PATCH = b"diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n"
 
 
 def test_example_policy_is_valid():
@@ -125,3 +125,24 @@ def test_trigger_and_model_admission():
     assert policy.check_trigger(**ok, fork=True).verdict is Verdict.DENY
     assert policy.check_model("deepseek/deepseek-flash").allowed
     assert not policy.check_model("openai/gpt").allowed
+
+
+def test_changed_lines_count_hunk_lines_that_look_like_file_headers():
+    from ci_repair.policy import patch_stats
+
+    patch = (
+        b"diff --git a/q.sql b/q.sql\n"
+        b"--- a/q.sql\n"
+        b"+++ b/q.sql\n"
+        b"@@ -1,2 +1,2 @@\n"
+        b"--- an old SQL comment\n"
+        b"+++counter;\n"
+        b" SELECT 1;\n"
+        b"diff --git a/b.py b/b.py\n"
+        b"--- a/b.py\n"
+        b"+++ b/b.py\n"
+        b"@@ -1 +1 @@\n"
+        b"-x = 1\n"
+        b"+x = 2\n"
+    )
+    assert patch_stats(patch)["changed_lines"] == 4

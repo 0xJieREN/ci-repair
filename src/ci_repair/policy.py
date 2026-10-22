@@ -224,11 +224,18 @@ def within(path: str, prefixes) -> bool:
 
 def patch_stats(patch: bytes) -> dict:
     lines = patch.splitlines()
+    changed, in_hunk = 0, False
+    for line in lines:
+        # "--- a/x" and "+++ b/x" are file headers only before a file's first hunk; inside a
+        # hunk they are a removed "-- ..." or an added "++..." line.
+        if line.startswith(b"diff --git "):
+            in_hunk = False
+        elif line.startswith(b"@@"):
+            in_hunk = True
+        elif in_hunk and line.startswith((b"+", b"-")):
+            changed += 1
     return {
-        "changed_lines": sum(
-            line.startswith((b"+", b"-")) and not line.startswith((b"+++", b"---"))
-            for line in lines
-        ),
+        "changed_lines": changed,
         "binary": any(
             line.startswith(b"GIT binary patch") or line.startswith(b"Binary files")
             for line in lines

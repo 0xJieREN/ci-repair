@@ -36,6 +36,27 @@ measurements live in [eval/README.md](eval/README.md).
 
 ## [Unreleased]
 
+### Stage F4: changed lines that look like file headers are counted (2026-10-22)
+
+**Motivation.** `patch_stats` skipped every line starting with `---` or `+++` to leave
+out file headers. Inside a hunk such a line is a removed `-- ...` line (an SQL or
+Lua comment) or an added `++...` line, so those changes were not counted against
+`patch.max_changed_lines`. `eval/compare.py` had its own copy of the same count.
+
+**Fixed**
+- Lines are counted only inside hunks: between a `@@` line and the next
+  `diff --git` header.
+- `eval/compare.py` uses `patch_stats` instead of its copy.
+
+**Verification.** A new test with both kinds of line failed before the fix. One
+existing test used a hand-written patch without `diff --git` and `@@` lines, which
+`git diff` never produces; it now uses a well-formed patch. The 296 recorded CI
+Repair patches under `runs/` get the same count as before, so no recorded policy
+decision changes. `scripts/check.sh --unit`: 268 passed.
+
+**Known limits.** A patch without hunk headers now counts zero changed lines; every
+patch the system checks comes from `git diff --binary`.
+
 ### Stage F3: generated output in subdirectories is classified as generated (2026-10-22)
 
 **Motivation.** The `generated` category (DENY by default) listed `dist/*`, `build/*`,
