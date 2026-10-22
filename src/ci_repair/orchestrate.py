@@ -9,16 +9,20 @@ to the original snapshot, in fresh containers with that job's reconstructed envi
 import argparse
 import hashlib
 import json
+import logging
 import os
 import subprocess
 import tarfile
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+
+from minisweagent import Model
 
 from ci_repair.agent import StopReason
 from ci_repair.context import evidence_overlap, failure_evidence
+from ci_repair.diagnostics import configure_logging, record_error
 from ci_repair.github import CollectionError, load_context
 from ci_repair.pipeline import Config, reproduced, run_test, verify_patch, write_json
 from ci_repair.pipeline import run as run_pipeline
@@ -47,13 +51,15 @@ FIXED_DATE = {
     "GIT_COMMITTER_DATE": "2000-01-01T00:00:00Z",
 }
 
+logger = logging.getLogger(__name__)
+
 
 def order_jobs(entries: list[dict], doc: dict | None) -> tuple[list[dict], list[str]]:
     """Dependencies first (transitive `needs`), then workflow position, name and job ID."""
     jobs = (doc or {}).get("jobs", {}) if isinstance(doc, dict) else {}
     keys = list(jobs)
 
-    def needs(key):
+    def needs(key: str | None) -> set[str]:
         seen, stack = set(), [key]
         while stack:
             value = jobs.get(stack.pop(), {})
@@ -109,7 +115,7 @@ def tree(path: Path) -> str:
     return command(["git", "rev-parse", "HEAD^{tree}"], cwd=path).decode().strip()
 
 
-def git_commit(path: Path, message: str):
+def git_commit(path: Path, message: str) -> None:
     subprocess.run(
         ["git", *GIT_IDENTITY, "commit", "-q", "--allow-empty", "-m", message],
         cwd=path,
@@ -155,9 +161,9 @@ def repair_run(
     collection: Path,
     output: Path,
     *,
-    model_factory: Callable[[], object],
+    model_factory: Callable[[], Model],
     policy: Policy,
-    build=build_environment,
+    build: Callable[..., dict] = build_environment,
 ) -> dict:
     manifest = json.loads((collection / "run.json").read_text())
     if manifest.get("schema_version") != 1:
@@ -194,16 +200,22 @@ def repair_run(
     except CollectionError as exc:
         report.update(status="ERROR", stop_reason=StopReason.STALE_SOURCE.value, error=str(exc))
     except Exception as exc:
-        report.update(
-            status="ERROR",
-            stop_reason=StopReason.EXECUTION_ERROR.value,
-            error_type=type(exc).__name__,
-        )
+        report.update(status="ERROR", stop_reason=StopReason.EXECUTION_ERROR.value)
+        report.update(record_error(output, exc))
     write_json(output / "report.json", report)
     return report
 
 
-def _repair_run(collection, output, repo, manifest, report, model_factory, policy, build):
+def _repair_run(
+    collection: Path,
+    output: Path,
+    repo: Path,
+    manifest: dict,
+    report: dict,
+    model_factory: Callable[[], Model],
+    policy: Policy,
+    build: Callable[..., dict],
+) -> dict:
     sha = clean_head(repo)
     if sha != manifest["commit"]:
         raise CollectionError("Collected checkout no longer matches the run commit")
@@ -285,6 +297,7 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
             result["status"] = "SKIPPED_BUDGET"
             continue
         attempted += 1
+        logger.info("job %s (%s): building the environment", entry["job_id"], entry["job_name"])
         built = build(spec, archive, job_dir, policy)
         write_json(job_dir / "build.json", built)
         result["environment"].update(
@@ -341,6 +354,7 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
         # baseline, run alongside the agent, is this job's baseline. With them, the job
         # failed on the original source and the prior check showed the candidate still
         # fails it, possibly only in a later step: the pipeline runs no baseline of its own.
+        logger.info("job %s: repair agent started", entry["job_id"])
         repair = run_pipeline(
             replace(cfg, task=task, failure_reproduced=prior), model_factory(), policy
         )
@@ -451,6 +465,7 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
     for result in results:
         result.pop("config", None)
         result.pop("evidence", None)
+        logger.info("job %s: %s", result["job_id"], result["status"])
     report["jobs"] = results
     report["tests"] = tests
     report.update(summarize(results, patch, report.get("policy_decision")))
@@ -461,15 +476,24 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
 SPENT = {"steps": "model_calls", "cost": "estimated_cost_usd", "wall_seconds": "wall_seconds"}
 
 
-def add_usage(usage: dict, repair: dict):
+def add_usage(usage: dict, repair: dict) -> None:
     for key in ("model_calls", "estimated_cost_usd", "agent_steps", "wall_seconds"):
         usage[key] += repair.get("usage", {}).get(key, 0)
     usage["models_used"].update(repair.get("usage", {}).get("models_used", []))
 
 
 def fix_up(
-    result, addressed, output, candidate, cumulative, base, model_factory, policy, usage, total
-):
+    result: dict,
+    addressed: list[dict],
+    output: Path,
+    candidate: Path,
+    cumulative: Path,
+    base: str,
+    model_factory: Callable[[], Model],
+    policy: Policy,
+    usage: dict,
+    total: dict,
+) -> None:
     cfg = result["config"]
     left = {key: total[key] - usage[spent] for key, spent in SPENT.items()}
     if left["steps"] < 1 or left["cost"] <= 0 or left["wall_seconds"] < 1:
@@ -551,7 +575,7 @@ def first_failure(results: list[dict]) -> str:
     return StopReason.EXECUTION_ERROR.value
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("collection", type=Path, help="Output of ci-repair-github")
     parser.add_argument("--policy", type=Path, help="Operator policy YAML outside the repository")
@@ -560,6 +584,7 @@ def main():
     parser.add_argument("--env-file", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
+    configure_logging()
     collection = args.collection.resolve()
     try:
         policy = load_policy(args.policy, untrusted_roots=[collection])

@@ -888,8 +888,19 @@ def reconstruct(
 
 
 def translate_step(
-    step, where, failing, after, ctx, env, base_env, defaults, api, index, repo_files, problems
-):
+    step: dict,
+    where: str,
+    failing: bool,
+    after: bool,
+    ctx: dict,
+    env: dict,
+    base_env: dict,
+    defaults: dict,
+    api: dict[int, dict],
+    index: int,
+    repo_files: dict,
+    problems: Problems,
+) -> list[tuple[str, dict]]:
     """Return (kind, record) items: toolchain, checkout, needs, setup or shell."""
     for unknown in sorted(set(step) - STEP_KEYS):
         problems.block(f"{where}.{unknown} is not supported")

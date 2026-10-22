@@ -106,7 +106,16 @@ def job_log(repository: str, run: dict, run_id: int, job: dict) -> bytes:
     return log
 
 
-def job_metadata(repository, run, run_id, attempt, sha, source, job, log) -> dict:
+def job_metadata(
+    repository: str,
+    run: dict,
+    run_id: int,
+    attempt: int,
+    sha: str,
+    source: dict,
+    job: dict,
+    log: bytes,
+) -> dict:
     return {
         "schema_version": 1,
         **source,
@@ -132,7 +141,7 @@ def job_metadata(repository, run, run_id, attempt, sha, source, job, log) -> dic
     }
 
 
-def clone_at(repository: str, checkout: Path, sha: str):
+def clone_at(repository: str, checkout: Path, sha: str) -> None:
     command(
         [
             "gh",
@@ -251,7 +260,7 @@ def load_context(path: Path, sha: str, log: bytes) -> dict:
     return result
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repository", help="owner/name on github.com")
     parser.add_argument("run_id", type=int)

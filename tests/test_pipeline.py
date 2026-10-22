@@ -375,6 +375,7 @@ def test_agent_error_stops_the_pending_baseline(tmp_path, monkeypatch):
     report = run(cfg, object())
     assert report["status"] == "ERROR" and report["error_phase"] == "agent"
     assert killed.is_set() and time.monotonic() - started < 5
+    assert "provider failed" in (cfg.output / report["error_log"]).read_text()
 
 
 def test_baseline_failure_during_the_agent_is_attributed_to_the_baseline(tmp_path, monkeypatch):

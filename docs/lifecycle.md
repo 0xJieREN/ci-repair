@@ -147,6 +147,15 @@ still the latest, the branch (or open PR) head still equals the run's
 runs per repository/branch; an expired lease becomes `interrupted` and is never
 rerun silently. Stored errors contain only exception types.
 
+Reports, the queue and draft PR bodies can be shared, so an unexpected exception
+is recorded there by its type only (`error_type`). Its traceback goes to
+`error.log` beside the report (the job's `repair/` directory, the run directory,
+or `<state-dir>/runs/<key>/`; `<state-dir>/errors/<key>/` when the failure comes
+before the run has a directory), created with mode 0600, with credential-named
+environment values, bearer tokens and GitHub/provider key shapes replaced by
+`[REDACTED]`. `ci-repair-run` and `ci-repair-webhook` log per-job progress to
+stderr (`CI_REPAIR_LOG_LEVEL`, default `INFO`); stdout keeps their results.
+
 GitHub API access uses `gh` authentication (`GH_TOKEN` works, including an
 installation token minted for a GitHub App). Minting App tokens is not built in.
 

@@ -32,9 +32,56 @@ measurements live in [eval/README.md](eval/README.md).
 | 0.4.0 | 09-18…09-22 | `09afeb6`…`74c0d04` | Hardening, evaluation harnesses, then the automatic lifecycle: policy, stop gate, reconstruction, multi-job, webhook | Paired synthetic, historical and LCA pilots |
 | 0.5.0 | 09-23…09-28 | `a0a3377`…`v0.5.0` | Scope focus, live acceptance, replay fidelity on a real dataset, paired comparison with Pi, orchestration and verification efficiency | Live webhook→draft PR; 39/68 LCA tasks usable; 234 + 21 paired trials; −53% wall time from lean verification (round 3, 117 trials) |
 | 0.6.0 | 09-28 | `4504d62`…`v0.6.0` | Remove the manual single-job path; evaluation never scores provider failures; past results in one place | Full gate 240 passed; round 3 completed by a rerun with no provider errors |
-| Unreleased | 09-28…10-22 | `82090ad`… | Baseline alongside the agent; a checkable evaluation contract; failure analysis; a prompt intervention against it; the run loop tested without Docker | 10.8 s of baseline per trial overlapped (round 4, 39 trials × 1); all 111 passing patches of round 3 stay within the upstream fix's files; 16 of 19 failures are one behaviour; the intervention is inconclusive (8/12 against 6/12 on 4 tasks, run `36970961464`); unit gate 236 → 258 tests, coverage 81% → 89% |
+| Unreleased | 09-28…10-22 | `82090ad`… | Baseline alongside the agent; a checkable evaluation contract; failure analysis; a prompt intervention against it; the run loop tested without Docker; private tracebacks and typed signatures | 10.8 s of baseline per trial overlapped (round 4, 39 trials × 1); all 111 passing patches of round 3 stay within the upstream fix's files; 16 of 19 failures are one behaviour; the intervention is inconclusive (8/12 against 6/12 on 4 tasks, run `36970961464`); unit gate 236 → 279 tests, coverage 81% → 89% |
 
 ## [Unreleased]
+
+### Stage R1: private tracebacks, progress logs and typed signatures (2026-10-22)
+
+**Motivation.** A failed run recorded only the exception type. That protects the
+shared report, because provider and GitHub errors can echo credentials, but it
+left the operator nothing to debug. A long run printed nothing until its final
+line. `python-dotenv` was imported by three `--env-file` options but not declared,
+so it was present only through mini-swe-agent's dependencies. About thirty public
+functions had untyped parameters or return values.
+
+**Added**
+- `ci_repair.diagnostics.record_error`: writes the traceback to `error.log`
+  beside the report with mode 0600. It masks credential-named environment values,
+  bearer tokens, labelled keys (`api_key=`, `token:`) and GitHub/provider key
+  shapes. The report, queue row and webhook result still hold only `error_type`,
+  now with `error_log: "error.log"`. The pipeline, the orchestrator and the
+  webhook worker use it; a timeout records no traceback. A failure before the
+  webhook run has its directory is logged under `<state-dir>/errors/<key>/`, so a
+  requeued attempt keeps its plain run directory name.
+- Per-job progress (`building the environment`, `repair agent started`, final
+  status) on stderr through the `ci_repair` logger, for `ci-repair-run`,
+  `ci-repair-webhook` and `eval/compare.py`. `CI_REPAIR_LOG_LEVEL` sets the
+  level. The handler is attached to `ci_repair` only, because mini-swe-agent's
+  logger is at DEBUG and propagates to the root.
+
+**Changed**
+- `python-dotenv>=1,<2` is a declared dependency; the locked version is unchanged.
+- Public functions in `github`, `orchestrate`, `pipeline`, `policy`, `publish`,
+  `reconstruct`, `webhook`, `workspace` and `model` have parameter and return
+  annotations (`Model`, `Sandbox`, `Callable[..., dict]`, `Iterator[Sandbox]`).
+  `model.py` imports `Model` for type checking only, so mini is still imported
+  after `make_model` sets its environment.
+
+**Verification.** `scripts/check.sh --unit`: 279 passed, 14 skipped.
+`tests/test_diagnostics.py` covers masking, the file mode (also when a 0644 file
+existed), an unwritable directory and the logger scope. The existing error tests
+of the pipeline, the orchestrator and the webhook now also check the private log;
+one webhook test covers a failure before the run directory exists. Pyright 1.1.390
+(not part of the gate) reports 17 errors in `src/`, all from dynamic YAML/JSON
+values; none is in a signature annotated here.
+
+**Known limits.** Masking matches known shapes and this process's environment; a
+credential in another format can still reach `error.log`, which is why the file
+is owner-only and never published. `_repair_run` is still one ~250-line
+function: its phases share the candidate repository, the cumulative patch and the
+budget, so splitting it would need a state object that adds code without removing
+any.
 
 ### Stage F4: changed lines that look like file headers are counted (2026-10-22)
 

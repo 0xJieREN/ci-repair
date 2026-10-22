@@ -163,6 +163,20 @@ def test_worker_repairs_once_and_records_outcome(store, tmp_path, monkeypatch):
     assert stored[0] == "done" and json.loads(stored[1])["repair_status"] == "PASS"
 
 
+def test_an_error_before_the_run_directory_is_logged_apart_from_runs(store, tmp_path, monkeypatch):
+    post(store, payload())
+
+    def api(endpoint):
+        raise RuntimeError("Authorization: Bearer abcdefgh1234")
+
+    monkeypatch.setattr(webhook.github, "api", api)
+    result = webhook.process_one(store, POLICY, tmp_path, repair=lambda *a: pytest.fail("no"))
+    assert result["status"] == "failed" and result["result"]["error_type"] == "RuntimeError"
+    assert not (tmp_path / "runs").exists()  # a requeued attempt still gets the plain name
+    logged = (tmp_path / "errors/owner__repo-7-1/error.log").read_text()
+    assert "Bearer [REDACTED]" in logged and "abcdefgh1234" not in logged
+
+
 def test_errors_are_recorded_by_type_and_can_be_requeued(store, tmp_path, monkeypatch):
     fake_github(monkeypatch)
     post(store, payload())
@@ -172,7 +186,8 @@ def test_errors_are_recorded_by_type_and_can_be_requeued(store, tmp_path, monkey
 
     result = webhook.process_one(store, POLICY, tmp_path, repair=boom)
     assert result["status"] == "failed"
-    assert "secret" not in json.dumps(result["result"])
+    assert result["result"] == {"error_type": "RuntimeError", "error_log": "error.log"}
+    assert "token=[REDACTED]" in (tmp_path / "runs/owner__repo-7-1/error.log").read_text()
     assert store.requeue("owner/repo#7#1")
     previous = tmp_path / "runs" / "owner__repo-7-1"
     (previous / "evidence.txt").write_text("first attempt")

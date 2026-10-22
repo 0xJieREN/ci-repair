@@ -1,9 +1,13 @@
 """Model adapter construction; provider credentials remain on the host."""
 
 import os
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # make_model configures mini through the environment before importing it
+    from minisweagent import Model
 
 
-def make_model(name: str, model_class: str = "litellm", wall_seconds: int = 600):
+def make_model(name: str, model_class: str = "litellm", wall_seconds: int = 600) -> "Model":
     # Never put secrets in model_kwargs: mini serializes those into trajectory.json.
     if os.getenv("ANTHROPIC_AUTH_TOKEN") and not os.getenv("ANTHROPIC_API_KEY"):
         os.environ["ANTHROPIC_API_KEY"] = os.environ["ANTHROPIC_AUTH_TOKEN"]

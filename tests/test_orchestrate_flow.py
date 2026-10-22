@@ -185,9 +185,12 @@ def test_a_job_fixed_by_an_earlier_repair_starts_no_agent(tmp_path, world):
     assert "value = 1" in (tmp_path / "out/patch.diff").read_text()
 
 
-def test_independent_jobs_accumulate_one_patch(tmp_path, world):
+def test_independent_jobs_accumulate_one_patch(tmp_path, world, caplog):
     fake = world(set_value(1), set_flag)
-    report = run(tmp_path, fake, (("lint", "check"), ("other", "test")))
+    with caplog.at_level("INFO", logger="ci_repair"):
+        report = run(tmp_path, fake, (("lint", "check"), ("other", "test")))
+    assert sum("repair agent started" in m for m in caplog.messages) == 2
+    assert any(m.endswith(": REPAIRED") for m in caplog.messages)
     assert report["status"] == "PASS", report
     assert statuses(report) == {"lint": "REPAIRED", "other": "REPAIRED"}
     assert sorted(report["changed_files"]) == ["src/app.py", "src/other.py"]
@@ -329,6 +332,10 @@ def test_errors_are_reported_without_their_message(tmp_path, world):
     report = run(tmp_path, fake, (("lint", "check"),))
     assert report["status"] == "ERROR" and report["error_type"] == "RuntimeError"
     assert "secret-value" not in (tmp_path / "out/report.json").read_text()
+    # The traceback stays next to the report for the operator, credentials masked.
+    assert report["error_log"] == "error.log"
+    private = (tmp_path / "out/error.log").read_text()
+    assert "RuntimeError" in private and "secret-value" not in private
 
 
 BOTH_JOB = """  both:

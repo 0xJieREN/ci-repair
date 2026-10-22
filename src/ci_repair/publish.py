@@ -167,7 +167,7 @@ def remote_sha(url: str, branch: str) -> str | None:
     return result.decode().split()[0] if result.strip() else None
 
 
-def require_base(url: str, base: str, expected: str):
+def require_base(url: str, base: str, expected: str) -> None:
     if remote_sha(url, base) != expected:
         raise PublicationError(
             "Target branch moved or disappeared; collect and verify its current commit again"
@@ -378,7 +378,7 @@ def auto(run_dir: Path, output: Path, policy: Policy) -> dict:
     return result
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
     prep = sub.add_parser(

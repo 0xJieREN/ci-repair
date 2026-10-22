@@ -8,6 +8,7 @@ import copy
 import fnmatch
 import hashlib
 import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
@@ -189,7 +190,7 @@ TEST_FILES = (
 )
 
 
-def _match(path: str, patterns) -> bool:
+def _match(path: str, patterns: Iterable[str]) -> bool:
     name = PurePosixPath(path).name
     return any(
         fnmatch.fnmatchcase(path, p) or ("/" not in p and fnmatch.fnmatchcase(name, p))
@@ -212,7 +213,7 @@ def safe_prefix(prefix: str) -> bool:
     return bool(p.parts) and not p.is_absolute() and ".." not in p.parts and p.parts[0] != ".git"
 
 
-def within(path: str, prefixes) -> bool:
+def within(path: str, prefixes: Iterable[str]) -> bool:
     p = PurePosixPath(path)
     if not path or p.is_absolute() or ".." in p.parts:
         return False
@@ -425,7 +426,7 @@ class Policy:
 
     # --- Patch risk ------------------------------------------------------------------
 
-    def check_patch(self, paths: list[str], patch: bytes, allowed_paths) -> Decision:
+    def check_patch(self, paths: list[str], patch: bytes, allowed_paths: Sequence[str]) -> Decision:
         if not paths or not patch:
             return Decision(Verdict.DENY, ("empty patch",))
         rules = self.data["patch"]
@@ -455,7 +456,7 @@ class Policy:
                 decisions.append(Decision(Verdict.REVIEW, (f"{measure}: {value}",)))
         return combine(Decision(Verdict.ALLOW), *decisions)
 
-    def agent_summary(self, allowed_paths) -> dict:
+    def agent_summary(self, allowed_paths: Sequence[str]) -> dict:
         """What the agent may know to avoid wasted attempts; enforcement stays outside."""
         categories = self.data["patch"]["categories"]
         return {
@@ -472,7 +473,7 @@ class Policy:
         return {"source": self.source, "sha256": self.digest}
 
 
-def load_policy(path: Path | None, *, untrusted_roots=()) -> Policy:
+def load_policy(path: Path | None, *, untrusted_roots: Iterable[Path] = ()) -> Policy:
     """Load operator policy; refuse files that live inside any repository under repair."""
     if path is None:
         return Policy()
