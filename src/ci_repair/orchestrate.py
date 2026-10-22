@@ -262,6 +262,7 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
         "models_used": set(),
     }
     repaired_names: list[str] = []
+    failed_on_original: set[int] = set()  # jobs whose baseline reproduced on the original
     attempted = 0
     results = []
     for entry in ordered:
@@ -315,6 +316,7 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
             if not reproduced(baseline):
                 result["status"] = "BASELINE_NOT_REPRODUCED"
                 continue
+            failed_on_original.add(entry["job_id"])
             result["baseline_matches_ci_log"] = evidence_overlap(ci_log, baseline.get("output", ""))
             (job_dir / "prior-check").mkdir()
             check = verify_patch(
@@ -342,13 +344,15 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
         result.update(repair_status=repair["status"], stop_reason=repair.get("stop_reason"))
         record = cfg.output / "baseline.json"
         if not prior and record.exists():
-            output_text = json.loads(record.read_text()).get("output", "")
-            result["baseline_matches_ci_log"] = evidence_overlap(ci_log, output_text)
+            baseline = json.loads(record.read_text())
+            result["baseline_matches_ci_log"] = evidence_overlap(ci_log, baseline.get("output", ""))
+            if reproduced(baseline):
+                failed_on_original.add(entry["job_id"])
         if repair["status"] == "BASELINE_NOT_REPRODUCED":
             result["status"] = "BASELINE_NOT_REPRODUCED"
             continue
         if not repair.get("verified"):
-            result["status"] = "REPAIR_FAILED"
+            result.update(status="REPAIR_FAILED", config=cfg)
             continue
         command(
             ["git", "apply", "--index", "--binary", str(cfg.output / "patch.diff")], cwd=candidate
@@ -368,7 +372,7 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
     )
     addressed = [r for r in results if r.get("status") in ("REPAIRED", "FIXED_BY_PRIOR")]
 
-    def verify_all(label: str, jobs: list[dict]) -> list[dict]:
+    def verify_all(label: str, jobs: list[dict], failed: str = "REGRESSED") -> list[dict]:
         """Jobs against the one cumulative patch, in fresh containers.
 
         A job whose checks already passed with a patch applied to the original snapshot that
@@ -390,7 +394,7 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
             result["final_verification"] = final["status"]
             found.extend(final.get("tests", []))
             if not final.get("verified"):
-                result["status"] = "REGRESSED"
+                result["status"] = failed
         return found
 
     tests = verify_all("verification", addressed) if cumulative.read_bytes() else []
@@ -420,6 +424,18 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
         # A failed fix-up stays REGRESSED; everything else is judged on the new patch.
         again = [r for r in addressed if r["status"] != "REGRESSED"]
         tests = verify_all("verification-after-fixup", again)
+    if cumulative.read_bytes():
+        # A later repair can fix a job whose own attempt failed. Its failure reproduced on
+        # the original source, so passing with the final patch is what FIXED_BY_PRIOR needs.
+        unrepaired = [
+            r
+            for r in results
+            if r["status"] == "REPAIR_FAILED" and r["job_id"] in failed_on_original
+        ]
+        tests += verify_all("verification-unrepaired", unrepaired, failed="REPAIR_FAILED")
+        for result in unrepaired:
+            if result["final_verification"] == "PASS":
+                result["status"] = "FIXED_BY_LATER"
     patch = cumulative.read_bytes()
     report["patch_sha256"] = hashlib.sha256(patch).hexdigest()
     report["usage"] = {**usage, "models_used": sorted(usage["models_used"])}

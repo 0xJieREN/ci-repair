@@ -36,6 +36,29 @@ measurements live in [eval/README.md](eval/README.md).
 
 ## [Unreleased]
 
+### Stage F1: a job a later repair fixed is no longer reported unrepaired (2026-10-22)
+
+**Motivation.** E2 found one trial (task 26, round 4) that passed the grader but
+was reported `PARTIAL`: the first job's agent failed, the second job's repair fixed
+both jobs, and final verification checked only `REPAIRED` and `FIXED_BY_PRIOR` jobs.
+Such a run could not be published although its patch was verified.
+
+**Fixed**
+- After final verification, each `REPAIR_FAILED` job whose failure reproduced on the
+  original source is verified against the final patch in fresh containers. If it
+  passes it becomes `FIXED_BY_LATER` and counts toward a run `PASS`; otherwise it
+  stays `REPAIR_FAILED`, now with `final_verification`.
+- A job whose session ended before its baseline finished (for example a provider
+  error) has no reproduced failure and is never credited this way.
+
+**Verification.** New tests in `tests/test_orchestrate_flow.py`: the task-26 shape
+(first agent makes no change, second repair fixes both) now ends `PASS`; it failed
+before the fix. A session that errors before its baseline stays `REPAIR_FAILED`.
+`scripts/check.sh --unit`: 260 passed.
+
+**Known limits.** Not rerun on task 26 itself; the claim rests on the test that
+reproduces its shape. A failed check costs one more container run per unrepaired job.
+
 ### Stage T1: the run loop tested without Docker (2026-10-22)
 
 **Motivation.** Without Docker the unit gate covered 63% of `orchestrate.py`. The
@@ -142,7 +165,7 @@ in full; the rest were classified by the counts. The cause of the search is not
 established. The task context names a commit the workspace cannot resolve, which
 every `NO_PATCH` session mentions, but Pi searches without it. One trial (task 26,
 round 4) shows a separate gap: a job whose repair failed is not checked against the
-final patch, so a run a later repair completed is reported `PARTIAL`.
+final patch, so a run a later repair completed is reported `PARTIAL` (fixed in F1).
 
 ### Stage E1: an evaluation contract that can be checked (2026-10-02, `d500884`)
 

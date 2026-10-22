@@ -118,6 +118,9 @@ change, with its current failure as the log. The fix-up spends only what the
 repairs left of the run's budget (the per-job calls, cost and wall time times the
 jobs attempted) and is skipped (`SKIPPED_BUDGET`) when nothing is left. Only if a fix-up verifies are the jobs
 verified again; a job that is still broken keeps `REGRESSED` and the run fails.
+A job whose own repair failed (`REPAIR_FAILED`) but whose failure reproduced on the
+original source is then checked against the final patch too: a later repair may
+have fixed it, and it becomes `FIXED_BY_LATER`.
 Run status: `PASS` (every failed job
 verified), `PARTIAL`, `FAIL`, `UNSUPPORTED_ENVIRONMENT`, `PATCH_REJECTED`,
 `ERROR`. Only `PASS` is publishable, as one draft PR.

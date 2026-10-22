@@ -231,6 +231,36 @@ def test_a_job_the_agent_cannot_repair_makes_the_run_partial(tmp_path, world):
     assert report["stop_reason"] == "NO_PATCH"
 
 
+def test_a_later_repair_can_fix_a_job_whose_own_attempt_failed(tmp_path, world):
+    # Round 4, task 26: the first job's agent failed; the second job's repair fixed both.
+    fake = world(no_change, set_value(1))
+    report = run(tmp_path, fake, (("lint", "check"), ("unit", "test")))
+    assert statuses(report) == {"lint": "FIXED_BY_LATER", "unit": "REPAIRED"}
+    assert report["status"] == "PASS" and report["verified"], report
+    lint = report["jobs"][0]
+    assert lint["repair_status"] == "NO_PATCH" and lint["final_verification"] == "PASS"
+    assert len(report["tests"]) == 4
+
+
+def test_a_job_whose_failure_never_reproduced_is_not_credited_to_a_later_repair(
+    tmp_path, world, monkeypatch
+):
+    fake = world(no_change, set_value(1))
+    pipeline = fake.pipeline
+
+    def provider_error_first(cfg, edit, policy):
+        if not fake.agents:  # the first session fails before its baseline finishes
+            fake.agents.append(cfg)
+            cfg.output.mkdir(parents=True)
+            return {"status": "ERROR", "verified": False, "stop_reason": "EXECUTION_ERROR"}
+        return pipeline(cfg, edit, policy)
+
+    monkeypatch.setattr(orchestrate, "run_pipeline", provider_error_first)
+    report = run(tmp_path, fake, (("lint", "check"), ("unit", "test")))
+    assert statuses(report) == {"lint": "REPAIR_FAILED", "unit": "REPAIRED"}
+    assert report["status"] == "PARTIAL"
+
+
 def test_jobs_beyond_the_job_budget_are_skipped(tmp_path, world):
     fake = world(set_value(1))
     policy = Policy({**POLICY, "repair": {"max_jobs": 1}})
