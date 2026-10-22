@@ -367,6 +367,7 @@ def fix_up_fixture(tmp_path, monkeypatch, spent_calls):
 def test_fix_up_spends_only_what_the_repairs_left(tmp_path, monkeypatch):
     result, usage, seen = fix_up_fixture(tmp_path, monkeypatch, spent_calls=50)
     assert (seen[0].steps, seen[0].cost, seen[0].wall_seconds) == (10, 1.0, 200)
+    assert seen[0].failure_reproduced  # it may fail only in a step after the failing one
     assert usage["model_calls"] == 54 and usage["wall_seconds"] == 1020.0
     assert result["fixup"]["repair_status"] == "FAIL"
 

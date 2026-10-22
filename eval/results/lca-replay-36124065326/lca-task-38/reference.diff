@@ -1,0 +1,93 @@
+diff --git a/beetsplug/advancedrewrite.py b/beetsplug/advancedrewrite.py
+index 639aa5247..20f2b7e03 100644
+--- a/beetsplug/advancedrewrite.py
++++ b/beetsplug/advancedrewrite.py
+@@ -161,7 +161,7 @@ class AdvancedRewritePlugin(BeetsPlugin):
+                             )
+                     elif isinstance(replacement, str):
+                         if Item._fields[fieldname] is MULTI_VALUE_DSV:
+-                            replacement = list(replacement)
++                            replacement = [replacement]
+                     else:
+                         raise UserError(
+                             f"Invalid type of replacement {replacement} "
+diff --git a/beetsplug/edit.py b/beetsplug/edit.py
+index 8a07fccaa..323dd9e41 100644
+--- a/beetsplug/edit.py
++++ b/beetsplug/edit.py
+@@ -23,7 +23,7 @@ from tempfile import NamedTemporaryFile
+ 
+ import yaml
+ 
+-from beets import plugins, ui, util, config
++from beets import plugins, ui, util
+ from beets.dbcore import types
+ from beets.importer import action
+ from beets.ui.commands import PromptChoice, _do_query
+@@ -155,8 +155,6 @@ class EditPlugin(plugins.BeetsPlugin):
+             }
+         )
+ 
+-        self.has_shown_ui = False
+-
+         self.register_listener(
+             "before_choose_candidate", self.before_choose_candidate_listener
+         )
+@@ -238,23 +236,11 @@ class EditPlugin(plugins.BeetsPlugin):
+         # Get the content to edit as raw data structures.
+         old_data = [flatten(o, fields) for o in objs]
+ 
+-        # take set fields into account
+-        set_fields = config["import"]["set_fields"]
+-        if set_fields and not self.has_shown_ui:
+-            old_str = "\n\n# note: the following fields will be reset to their current values:\n"
+-            for key in set_fields:
+-                old_str += f"# - {key}\n"
+-            for obj in old_data:
+-                # those values will be enforced later anyway
+-                obj.update({k:v.get() for k,v in set_fields.items()})
+-        else:
+-            old_str = ""
+-
+         # Set up a temporary file with the initial data for editing.
+         new = NamedTemporaryFile(
+             mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+         )
+-        old_str = dump(old_data) + old_str
++        old_str = dump(old_data)
+         new.write(old_str)
+         new.close()
+ 
+@@ -263,7 +249,6 @@ class EditPlugin(plugins.BeetsPlugin):
+             while True:
+                 # Ask the user to edit the data.
+                 edit(new.name, self._log)
+-                self.has_shown_ui = True
+ 
+                 # Read the data back after editing and check whether anything
+                 # changed.
+diff --git a/beetsplug/web/__init__.py b/beetsplug/web/__init__.py
+index cebb0be0a..cd7e8a3fc 100644
+--- a/beetsplug/web/__init__.py
++++ b/beetsplug/web/__init__.py
+@@ -336,7 +336,6 @@ def item_file(item_id):
+     response = flask.send_file(
+         item_path, as_attachment=True, download_name=safe_filename
+     )
+-    response.headers["Content-Length"] = os.path.getsize(item_path)
+     return response
+ 
+ 
+diff --git a/docs/changelog.rst b/docs/changelog.rst
+index 73cc10f3d..b3b63f1c2 100644
+--- a/docs/changelog.rst
++++ b/docs/changelog.rst
+@@ -279,6 +279,8 @@ Bug fixes:
+   :bug:`4973`
+ * Fix bug regarding displaying tracks that have been changed not being
+   displayed unless the detail configuration is enabled.
++* :doc:`/plugins/web`: Fix range request support, allowing to play large audio/
++  opus files using e.g. a browser/firefox or gstreamer/mopidy directly.
+ 
+ For plugin developers:
+ 

@@ -1,5 +1,8 @@
 # CI Repair
 
+**An unattended coding agent that turns a failed GitHub Actions run into a verified
+draft pull request.**
+
 CI Repair uses mini-SWE-agent to repair failed GitHub Actions runs. It collects
 all failed jobs from a pinned run attempt, reconstructs supported CI environments,
 repairs them in order, verifies one cumulative patch in fresh Docker containers,
@@ -9,6 +12,27 @@ The agent loop is mini-SWE-agent's. This project is what surrounds it: pinning t
 failure, rebuilding its environment, a submit gate the model cannot talk past,
 verification the agent does not control, and a policy that decides what may be
 published.
+
+## Why
+
+A red CI run interrupts whoever pushed it, and many failures have routine fixes: a
+lint rule, a type error, a test broken by a dependency upgrade. A general coding
+agent can often write such a fix when a person points it at the failure. Running it
+unattended needs what the agent loop does not provide:
+
+- **Which failure, exactly.** The run attempt and commit are pinned, and the repair
+  is dropped if the branch has moved on.
+- **The CI's environment.** The job is rebuilt from its workflow, and its failure must
+  reproduce before any model call is trusted.
+- **"Done" is not evidence.** Only the failed jobs' own commands, rerun in fresh
+  containers the agent never touched, can make a repair pass.
+- **Bounded authority.** Budgets, editable paths and the change categories a person
+  must review live in an operator policy outside the repository and outside the model.
+
+The project's question is whether that harness holds up on real failures against a
+general agent given the same model and budget. The [results](#results) answer it.
+
+## How it works
 
 ```mermaid
 flowchart LR
@@ -21,6 +45,58 @@ flowchart LR
     G -->|ALLOW| H[draft PR]
     G -->|REVIEW / DENY| I[operator]
 ```
+
+Inside one job's repair, the model, the agent's commands and the checks that judge the
+result run in separate places:
+
+```mermaid
+flowchart TB
+    subgraph host [Host: credentials stay here]
+        L[mini-SWE-agent loop<br>RepairAgent]
+        S[submit gate:<br>extract patch, policy, checks]
+        P[operator policy]
+    end
+    LLM[(model provider)]
+    A[agent container<br>no network, no capabilities]
+    B[baseline container<br>replays the failing command]
+    V[fresh containers<br>failing + regression commands]
+    L <-->|messages| LLM
+    L -->|shell commands| A
+    L -->|submit, or probe after an edit| S
+    S --> P
+    S -->|patch on the original source| V
+    B -->|failure reproduced?| S
+    V -->|the only source of PASS| S
+```
+
+The model's submission is a request: the gate rejects it with feedback when the
+checks fail, and stops the session as soon as a probe passes, so a correct patch is
+not overwritten. Jobs of one run are repaired in order on one cumulative patch, and
+every job is verified again against the final patch. The
+[repair lifecycle](docs/lifecycle.md) covers each step.
+
+| Module | Role |
+|---|---|
+| `webhook.py` | Signed intake, deduplication, SQLite queue, single worker |
+| `github.py` | Read-only collection of a run's failed jobs, logs and pinned source |
+| `reconstruct.py` | Workflow → replay spec (`SUPPORTED` / `REVIEW_REQUIRED` / `UNSUPPORTED`) → image |
+| `orchestrate.py` | Job order, cumulative patch, final verification, fix-up |
+| `pipeline.py`, `agent.py` | One job: baseline, bounded session, submit gate, fresh verification |
+| `policy.py` | Budgets and `ALLOW` / `REVIEW` / `DENY` for patches and publication |
+| `publish.py` | Creation-only draft PR from a verified run |
+| `workspace.py` | Source snapshots and locked-down disposable containers |
+
+## Quickstart
+
+No model key or Docker is needed to run the tests or to recompute the evaluation:
+
+```sh
+uv sync --locked
+bash scripts/check.sh --unit                # lint, format, 290 tests without Docker
+uv run python eval/reproduce.py             # every result table, from eval/results/
+```
+
+To repair real failures, see [Run the automatic flow](#run-the-automatic-flow).
 
 ## Results
 
@@ -49,9 +125,60 @@ a general coding agent, ran on the same tasks, images, model and budget.
   model, not a production success rate. Checks are the failed jobs' own commands;
   jobs that passed in the original run are not replayed.
 
-Every number has its run, commit and limits in the [evaluation record](eval/README.md);
+Every number has its run, commit and limits in the [evaluation record](eval/README.md),
+and `uv run python eval/reproduce.py --check` recomputes its tables from the archived
+evidence in [`eval/results/`](eval/results/README.md);
 the [changelog](CHANGELOG.md) records each iteration's motivation, estimate and
 measured outcome, including the ones that did not pay off.
+
+## Design trade-offs
+
+- **Reuse the agent loop; build the harness.** mini-SWE-agent's loop is under 200
+  lines and works. CI Repair subclasses it (`RepairAgent`) to turn submission
+  into a gated request and to report which limit ended a session. The cost is a
+  dependency on mini's internals, pinned to 2.4.6.
+- **Verification the agent cannot influence.** Every patch is rerun in fresh
+  containers from the original source, which costs time on each repair. Removing
+  repeated verification later cut the mean time per trial from 227 s to 107 s
+  without giving up the rule.
+- **Sequential jobs, one cumulative patch.** Jobs of one run often share a cause, so
+  each job sees earlier repairs, and a job they already fix is skipped
+  (`FIXED_BY_PRIOR`). Parallel sessions would be faster but would produce
+  conflicting patches; the final reverification and one fix-up session catch a later
+  repair that breaks an earlier job.
+- **Fail closed on environments.** A workflow feature the reconstructor does not
+  model (services, reusable workflows, `GITHUB_ENV`, non-Linux runners) makes the job
+  `UNSUPPORTED` instead of a guess. This limits coverage: 39 of 68 LCA tasks replay.
+- **Policy as code, outside the repository.** A pull request cannot edit the rules
+  that judge it, and the model never sees them. Changes to tests, lockfiles, CI
+  configuration or large patches go to a person (`REVIEW`); merging is always denied.
+- **A small service.** Stdlib HTTP, SQLite and one worker per host: nothing else to
+  operate, at the price of no horizontal scaling.
+
+## Limitations
+
+- The results come from one Python dataset, its replayable subset, and one model
+  (`deepseek/deepseek-flash`). They are pass rates on that subset, not a production
+  success rate.
+- A general agent repaired these tasks as well (113 against 111 of 117). The project
+  demonstrates the unattended path around the repair, not a better repair model.
+- 16 of the 19 failed trials are one behaviour: the agent reads the failing code and
+  never edits it within 30 calls. A one-time reminder to edit
+  ([the intervention](eval/README.md)) was inconclusive (8/12 against 6/12, 4 tasks).
+- Jobs that passed in the original run are not replayed, so a patch can break a job
+  that verification never runs.
+- The live path has one acceptance run on a toy repository. Fixes made after the last
+  paid round, such as rechecking a failed job against the final patch
+  (`FIXED_BY_LATER`), are tested locally but not measured on the dataset.
+
+## Roadmap
+
+1. Rerun the dataset on the current commit to measure the fixes since round 4.
+2. Evaluate on failures outside LCA and with a second model, so the results stop
+   depending on one dataset and one provider.
+3. Extend reconstruction to the most common `UNSUPPORTED` causes (`GITHUB_ENV`,
+   dynamic `fromJSON` matrices, multiple toolchains).
+4. Replay the original run's passing jobs as regression checks before publication.
 
 ## Status
 
@@ -113,7 +240,8 @@ bash scripts/check.sh           # Linux/server: full gate with running Docker
 The full gate runs locked dependency sync, lint and format checks, Docker
 integration tests, and Git diff checks. GitHub Actions uses the same script.
 No model API key or paid inference is needed. See
-[verification boundaries](docs/verification.md) for what local tests simulate.
+[verification boundaries](docs/verification.md) for what local tests simulate, and
+[CONTRIBUTING](CONTRIBUTING.md) for the developer guide.
 
 The repository retains the deliberately broken `examples/buggy` fixture because
 the local repair tests and manual GitHub workflow use it. Local run outputs and

@@ -55,13 +55,13 @@ def sessions(directories: list[Path]):
 def summarize(directories: list[Path]) -> str:
     groups = collections.defaultdict(list)
     for session in sessions(directories):
-        key = session["status"]
-        if key == "PASS":
-            key = "PASS, 15+ calls" if session["calls"] >= 15 else "PASS, under 15 calls"
+        key = f"`{session['status']}`"
+        if key == "`PASS`":
+            key += ", 15 or more calls" if session["calls"] >= 15 else ", under 15 calls"
         groups[key].append(session)
     lines = [
-        "| Session outcome | Sessions | Mean calls | Searched history | Commands "
-        "| Searched for copies | Commands |",
+        "| Session outcome | Sessions | Mean calls | Searched history | Commands per session "
+        "| Searched for copies | Commands per session |",
         "|---|---:|---:|---:|---:|---:|---:|",
     ]
     for key, rows in sorted(groups.items()):
@@ -71,7 +71,7 @@ def summarize(directories: list[Path]) -> str:
             f"{sum(r['history'] > 0 for r in rows)} | {mean('history'):.1f} | "
             f"{sum(r['copies'] > 0 for r in rows)} | {mean('copies'):.1f} |"
         )
-    tasks = collections.Counter(r["task"] for r in groups.get("NO_PATCH", []))
+    tasks = collections.Counter(r["task"] for r in groups.get("`NO_PATCH`", []))
     lines += [
         "",
         "NO_PATCH sessions by task: " + ", ".join(f"{t}: {n}" for t, n in sorted(tasks.items())),

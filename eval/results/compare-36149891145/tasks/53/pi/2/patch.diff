@@ -1,0 +1,149 @@
+diff --git a/yt_dlp/extractor/elevensports.py b/yt_dlp/extractor/elevensports.py
+new file mode 100644
+index 0000000..67a922b
+--- /dev/null
++++ b/yt_dlp/extractor/elevensports.py
+@@ -0,0 +1,64 @@
++from .common import InfoExtractor
++from ..utils import (
++    int_or_none,
++    unified_timestamp,
++    url_or_none,
++)
++
++
++class ElevenSportsIE(InfoExtractor):
++    _VALID_URL = r'https?://(?:www\.)?elevensports\.com/(?:embed/|event/)?(?P<id>[0-9A-Za-z_-]+)'
++    _TESTS = [{
++        'url': 'https://elevensports.com/embed/7pph4yjy',
++        'info_dict': {
++            'id': '7pph4yjy',
++            'ext': 'mp4',
++            'title': 'Primavera Femminile: AC Milan vs Roma',
++            'thumbnail': r're:^https?://.*\.(?:jpg|png)$',
++            'timestamp': 1690903200,
++            'upload_date': '20230801',
++            'duration': 5813,
++        },
++        'params': {'skip_download': 'm3u8'},
++    }, {
++        'url': 'https://elevensports.com/event/7pph4yjy',
++        'only_matching': True,
++    }]
++
++    def _real_extract(self, url):
++        video_id = self._match_id(url)
++        data = self._download_json(
++            f'https://cms-api.elevensports.com/v1/videos/{video_id}',
++            video_id, query={'include': 'event'}, fatal=False)
++        video = data.get('data') if isinstance(data, dict) else None
++        if not isinstance(video, dict):
++            video = {}
++
++        formats = []
++        for format_id, format_url in (video.get('urls') or {}).items():
++            format_url = url_or_none(format_url)
++            if not format_url:
++                continue
++            if format_id in ('hls', 'm3u8'):
++                formats.extend(self._extract_m3u8_formats(
++                    format_url, video_id, 'mp4', m3u8_id='hls', fatal=False))
++            elif format_id in ('dash', 'mpd'):
++                formats.extend(self._extract_mpd_formats(
++                    format_url, video_id, mpd_id='dash', fatal=False))
++            else:
++                formats.append({
++                    'url': format_url,
++                    'format_id': format_id,
++                })
++
++        return {
++            'id': video_id,
++            'title': video.get('title'),
++            'description': video.get('description'),
++            'thumbnail': url_or_none(video.get('image') or video.get('thumbnail')),
++            'timestamp': unified_timestamp(
++                video.get('published_at') or video.get('publishedAt') or video.get('date')),
++            'duration': int_or_none(video.get('duration')),
++            'formats': formats,
++            'is_live': video.get('live'),
++        }
+diff --git a/yt_dlp/extractor/ellentube.py b/yt_dlp/extractor/ellentube.py
+new file mode 100644
+index 0000000..64fa2c0
+--- /dev/null
++++ b/yt_dlp/extractor/ellentube.py
+@@ -0,0 +1,73 @@
++from .common import InfoExtractor
++from ..utils import (
++    int_or_none,
++    unified_timestamp,
++    url_or_none,
++)
++
++
++class EllenTubeIE(InfoExtractor):
++    _VALID_URL = r'''(?x)
++        (?:
++            ellentube:|
++            https?://(?:www\.)?ellentube\.com/(?:video/|embed/)
++        )
++        (?P<id>[\w-]+)
++    '''
++    _TESTS = []
++
++    def _call_api(self, path, video_id, query=None):
++        return self._download_json(
++            f'https://api-prod.ellentube.com/{path}', video_id, query=query, fatal=False) or {}
++
++    def _extract_video(self, video, video_id):
++        formats = []
++        for rendition in (video.get('videos') or []):
++            if not isinstance(rendition, dict):
++                continue
++            format_url = url_or_none(rendition.get('url'))
++            if not format_url:
++                continue
++            formats.append({
++                'url': format_url,
++                'format_id': rendition.get('type') or rendition.get('label'),
++                'width': int_or_none(rendition.get('width')),
++                'height': int_or_none(rendition.get('height')),
++            })
++
++        return {
++            'id': video_id,
++            'title': video.get('title'),
++            'description': video.get('description'),
++            'thumbnail': url_or_none(video.get('image') or video.get('thumbnail')),
++            'timestamp': unified_timestamp(
++                video.get('published_at') or video.get('publishedAt')),
++            'duration': int_or_none(video.get('duration')),
++            'formats': formats,
++        }
++
++    def _real_extract(self, url):
++        video_id = self._match_id(url)
++        video = self._call_api(f'v1/videos/{video_id}', video_id)
++        return self._extract_video(video, video_id)
++
++
++class EllenTubeVideoIE(EllenTubeIE):
++    _VALID_URL = r'https?://(?:www\.)?ellentube\.com/video/(?P<id>[\w-]+)'
++    _TESTS = []
++
++
++class EllenTubePlaylistIE(EllenTubeIE):
++    _VALID_URL = r'https?://(?:www\.)?ellentube\.com/playlist/(?P<id>[\w-]+)'
++    _TESTS = []
++
++    def _real_extract(self, url):
++        playlist_id = self._match_id(url)
++        playlist = self._call_api(f'v1/playlists/{playlist_id}', playlist_id)
++        entries = []
++        for video in (playlist.get('videos') or []):
++            if not isinstance(video, dict) or not video.get('id'):
++                continue
++            entries.append(self._extract_video(video, video['id']))
++        return self.playlist_result(
++            entries, playlist_id, playlist.get('title'), playlist.get('description'))

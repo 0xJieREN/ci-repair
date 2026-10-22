@@ -8,6 +8,7 @@ import copy
 import fnmatch
 import hashlib
 import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
@@ -139,10 +140,15 @@ CATEGORIES = {
         "*_pb2_grpc.py",
         "*.pb.go",
         "*.generated.*",
+        # Output directories at any depth: a monorepo package has its own dist/.
         "dist/*",
+        "*/dist/*",
         "build/*",
+        "*/build/*",
         "vendor/*",
+        "*/vendor/*",
         "node_modules/*",
+        "*/node_modules/*",
         "*.egg-info/*",
     ),
     "config": (
@@ -184,7 +190,7 @@ TEST_FILES = (
 )
 
 
-def _match(path: str, patterns) -> bool:
+def _match(path: str, patterns: Iterable[str]) -> bool:
     name = PurePosixPath(path).name
     return any(
         fnmatch.fnmatchcase(path, p) or ("/" not in p and fnmatch.fnmatchcase(name, p))
@@ -207,7 +213,7 @@ def safe_prefix(prefix: str) -> bool:
     return bool(p.parts) and not p.is_absolute() and ".." not in p.parts and p.parts[0] != ".git"
 
 
-def within(path: str, prefixes) -> bool:
+def within(path: str, prefixes: Iterable[str]) -> bool:
     p = PurePosixPath(path)
     if not path or p.is_absolute() or ".." in p.parts:
         return False
@@ -218,12 +224,20 @@ def within(path: str, prefixes) -> bool:
 
 
 def patch_stats(patch: bytes) -> dict:
+    """Changed lines (inside hunks only) and whether the patch has binary content."""
     lines = patch.splitlines()
+    changed, in_hunk = 0, False
+    for line in lines:
+        # "--- a/x" and "+++ b/x" are file headers only before a file's first hunk; inside a
+        # hunk they are a removed "-- ..." or an added "++..." line.
+        if line.startswith(b"diff --git "):
+            in_hunk = False
+        elif line.startswith(b"@@"):
+            in_hunk = True
+        elif in_hunk and line.startswith((b"+", b"-")):
+            changed += 1
     return {
-        "changed_lines": sum(
-            line.startswith((b"+", b"-")) and not line.startswith((b"+++", b"---"))
-            for line in lines
-        ),
+        "changed_lines": changed,
         "binary": any(
             line.startswith(b"GIT binary patch") or line.startswith(b"Binary files")
             for line in lines
@@ -272,6 +286,13 @@ def _verdict(value, where: str) -> Verdict:
 
 
 class Policy:
+    """The operator's rules, validated strictly: unknown keys are errors, not ignored.
+
+    `budget` caps what a run may spend, `check_patch` classifies a patch's files and size
+    as ALLOW / REVIEW / DENY, and the repository, branch and publication rules gate the
+    trigger and the draft PR. The model never sees or changes it.
+    """
+
     def __init__(self, data: dict | None = None, *, source: str = "builtin", raw: bytes = b""):
         self.data: dict = _strict_merge(DEFAULTS, data or {}, "policy")
         self.source = source
@@ -413,7 +434,7 @@ class Policy:
 
     # --- Patch risk ------------------------------------------------------------------
 
-    def check_patch(self, paths: list[str], patch: bytes, allowed_paths) -> Decision:
+    def check_patch(self, paths: list[str], patch: bytes, allowed_paths: Sequence[str]) -> Decision:
         if not paths or not patch:
             return Decision(Verdict.DENY, ("empty patch",))
         rules = self.data["patch"]
@@ -443,7 +464,7 @@ class Policy:
                 decisions.append(Decision(Verdict.REVIEW, (f"{measure}: {value}",)))
         return combine(Decision(Verdict.ALLOW), *decisions)
 
-    def agent_summary(self, allowed_paths) -> dict:
+    def agent_summary(self, allowed_paths: Sequence[str]) -> dict:
         """What the agent may know to avoid wasted attempts; enforcement stays outside."""
         categories = self.data["patch"]["categories"]
         return {
@@ -460,7 +481,7 @@ class Policy:
         return {"source": self.source, "sha256": self.digest}
 
 
-def load_policy(path: Path | None, *, untrusted_roots=()) -> Policy:
+def load_policy(path: Path | None, *, untrusted_roots: Iterable[Path] = ()) -> Policy:
     """Load operator policy; refuse files that live inside any repository under repair."""
     if path is None:
         return Policy()

@@ -1,0 +1,169 @@
+diff --git a/yt_dlp/extractor/elevensports.py b/yt_dlp/extractor/elevensports.py
+new file mode 100644
+index 0000000..5e36dd9
+--- /dev/null
++++ b/yt_dlp/extractor/elevensports.py
+@@ -0,0 +1,57 @@
++from .common import InfoExtractor
++from ..utils import (
++    ExtractorError,
++    traverse_obj,
++    url_or_none,
++)
++
++
++class ElevenSportsIE(InfoExtractor):
++    _VALID_URL = r'https?://(?:www\.)?elevensports\.com/(?P<lang>[\w-]+)/(?:event|replay)/(?P<id>[\w-]+)'
++    _TESTS = [{
++        'url': 'https://elevensports.com/en/event/fifa-world-cup-qatar-2022-final',
++        'info_dict': {
++            'id': 'fifa-world-cup-qatar-2022-final',
++            'ext': 'mp4',
++            'title': 're:.+',
++        },
++        'params': {'skip_download': 'm3u8'},
++    }, {
++        'url': 'https://elevensports.com/es/replay/uefa-champions-league-final',
++        'only_matching': True,
++    }]
++
++    def _real_extract(self, url):
++        lang, video_id = self._match_valid_url(url).group('lang', 'id')
++        webpage = self._download_webpage(url, video_id)
++
++        player_data = self._search_json(
++            r'window\.__NUXT__\s*=', webpage, 'nuxt data', video_id, default={})
++        video = traverse_obj(player_data, ('state', 'event', 'video'), default={})
++
++        formats, subtitles = [], {}
++        for source in traverse_obj(video, ('sources', ..., {dict})):
++            stream_url = url_or_none(source.get('src') or source.get('url'))
++            if not stream_url:
++                continue
++            if source.get('type') == 'application/x-mpegURL' or stream_url.endswith('.m3u8'):
++                fmts, subs = self._extract_m3u8_formats_and_subtitles(
++                    stream_url, video_id, 'mp4', m3u8_id='hls', fatal=False)
++                formats.extend(fmts)
++                subtitles = self._merge_subtitles(subtitles, subs)
++            else:
++                formats.append({'url': stream_url})
++
++        if not formats:
++            raise ExtractorError('Unable to find a playable stream', expected=True)
++
++        return {
++            'id': video_id,
++            'title': (
++                traverse_obj(video, 'title', 'name', get_all=False)
++                or self._og_search_title(webpage, default=None)),
++            'description': self._og_search_description(webpage, default=None),
++            'thumbnail': self._og_search_thumbnail(webpage, default=None),
++            'formats': formats,
++            'subtitles': subtitles,
++        }
+diff --git a/yt_dlp/extractor/ellentube.py b/yt_dlp/extractor/ellentube.py
+new file mode 100644
+index 0000000..fbe143c
+--- /dev/null
++++ b/yt_dlp/extractor/ellentube.py
+@@ -0,0 +1,100 @@
++from .common import InfoExtractor
++from ..utils import (
++    ExtractorError,
++    int_or_none,
++    traverse_obj,
++    url_or_none,
++)
++
++
++class EllenTubeBaseIE(InfoExtractor):
++    def _extract_video(self, video, video_id):
++        formats = []
++        for format_id, format_url in traverse_obj(video, ('formats', {dict})).items():
++            stream_url = url_or_none(format_url)
++            if not stream_url:
++                continue
++            formats.append({
++                'url': stream_url,
++                'format_id': format_id,
++                'height': int_or_none(self._search_regex(
++                    r'(\d+)[pP]', format_id, 'height', default=None)),
++            })
++
++        if not formats:
++            raise ExtractorError('No video formats found', expected=True)
++
++        return {
++            'id': video_id,
++            'title': traverse_obj(video, 'title', 'name', get_all=False) or video_id,
++            'description': traverse_obj(video, 'description', 'summary', get_all=False),
++            'thumbnail': traverse_obj(video, 'thumbnail', 'image', get_all=False),
++            'duration': int_or_none(traverse_obj(video, 'duration', get_all=False)),
++            'formats': formats,
++        }
++
++    def _extract_videos(self, videos, playlist_id):
++        entries = []
++        for video in traverse_obj(videos, (..., {dict})):
++            video_id = traverse_obj(video, 'id', 'video_id', get_all=False)
++            if not video_id:
++                continue
++            entries.append(self.url_result(
++                self._extract_video(video, video_id),
++                ie=EllenTubeVideoIE, video_id=video_id))
++        return self.playlist_result(entries, playlist_id)
++
++
++class EllenTubeIE(EllenTubeBaseIE):
++    _VALID_URL = r'https?://(?:www\.)?ellentube\.com/video/(?P<id>[\w-]+)'
++    _TESTS = [{
++        'url': 'https://www.ellentube.com/video/ellen-surprises-her-fans',
++        'info_dict': {
++            'id': 'ellen-surprises-her-fans',
++            'ext': 'mp4',
++            'title': 're:.+',
++        },
++        'params': {'skip_download': 'm3u8'},
++    }]
++
++    def _real_extract(self, url):
++        video_id = self._match_id(url)
++        webpage = self._download_webpage(url, video_id)
++        video = self._search_json(
++            r'window\.__INITIAL_STATE__\s*=', webpage, 'initial state', video_id, default={})
++        return self._extract_video(video, video_id)
++
++
++class EllenTubeVideoIE(EllenTubeBaseIE):
++    _VALID_URL = r'https?://(?:www\.)?ellentube\.com/(?:embed|v)/(?P<id>[\w-]+)'
++    _TESTS = [{
++        'url': 'https://www.ellentube.com/embed/ellen-surprises-her-fans',
++        'only_matching': True,
++    }]
++
++    def _real_extract(self, url):
++        video_id = self._match_id(url)
++        webpage = self._download_webpage(url, video_id)
++        video = self._search_json(
++            r'window\.__INITIAL_STATE__\s*=', webpage, 'initial state', video_id, default={})
++        return self._extract_video(video, video_id)
++
++
++class EllenTubePlaylistIE(EllenTubeBaseIE):
++    _VALID_URL = r'https?://(?:www\.)?ellentube\.com/(?:season|show)/(?P<id>[\w-]+)'
++    _TESTS = [{
++        'url': 'https://www.ellentube.com/season/the-ellen-degeneres-show',
++        'info_dict': {
++            'id': 'the-ellen-degeneres-show',
++            'title': 're:.+',
++        },
++        'playlist_mincount': 1,
++    }]
++
++    def _real_extract(self, url):
++        playlist_id = self._match_id(url)
++        webpage = self._download_webpage(url, playlist_id)
++        data = self._search_json(
++            r'window\.__INITIAL_STATE__\s*=', webpage, 'initial state', playlist_id, default={})
++        videos = traverse_obj(data, ('videos', ..., {dict})) or []
++        return self._extract_videos(videos, playlist_id)

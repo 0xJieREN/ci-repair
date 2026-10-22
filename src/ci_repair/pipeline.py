@@ -7,14 +7,18 @@ import shutil
 import signal
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
+from minisweagent import Model
+
 from ci_repair.agent import AgentExit, GateResult, RepairAgent, StopReason, final_stop_reason
 from ci_repair.context import failure_evidence
+from ci_repair.diagnostics import record_error
 from ci_repair.policy import Policy, Verdict, safe_prefix, within
-from ci_repair.workspace import PROBE_INDEX, command, extract_patch, snapshot, workspace
+from ci_repair.workspace import PROBE_INDEX, Sandbox, command, extract_patch, snapshot, workspace
 
 SYSTEM_TEMPLATE = (
     "Repair the failing repository in /workspace. Use the bash tool to inspect, "
@@ -41,6 +45,8 @@ class BaselineError(Exception):
 
 @dataclass(frozen=True)
 class Config:
+    """One job's repair: the source, its failure, the checks to run and the requested budget."""
+
     repo: Path
     failure_log: Path
     output: Path
@@ -53,8 +59,10 @@ class Config:
     wall_seconds: int = 600
     command_seconds: int = 60
     task: str = ""
+    # The caller has shown this source fails the job's checks, so no baseline runs here.
+    failure_reproduced: bool = False
 
-    def validate(self):
+    def validate(self) -> None:
         budgets = (self.steps, self.cost, self.wall_seconds, self.command_seconds)
         if not all(math.isfinite(value) and value > 0 for value in budgets):
             raise ValueError("All budgets must be finite and positive")
@@ -69,7 +77,7 @@ class Config:
             raise ValueError("Output must be outside the target repository")
 
 
-def write_json(path: Path, value):
+def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, default=str) + "\n")
 
 
@@ -93,7 +101,7 @@ def paths_allowed(paths: list[str], prefixes: tuple[str, ...]) -> bool:
     return bool(paths) and all(within(path, prefixes) for path in paths)
 
 
-def run_test(env, script: str, output: Path) -> dict:
+def run_test(env: Sandbox, script: str, output: Path) -> dict:
     start = time.monotonic()
     # Ordinary test output must not trigger mini's submission protocol.
     result = env.execute({"command": f"printf 'CI_REPAIR_TEST\\n'; ( {script}\n)"})
@@ -120,7 +128,7 @@ class Baseline:
         self._pool = ThreadPoolExecutor(1, thread_name_prefix="baseline")
         self._future = self._pool.submit(self._run, config, archive, image)
 
-    def _run(self, config, archive, image) -> dict:
+    def _run(self, config: Config, archive: Path, image: str) -> dict:
         with workspace(archive, image, config.command_seconds, config.wall_seconds) as env:
             self._env = env
             if self._stop.is_set():
@@ -139,7 +147,7 @@ class Baseline:
         finally:
             self.waited += time.monotonic() - started
 
-    def close(self):
+    def close(self) -> None:
         """Stop a baseline nobody will wait for, such as after an agent error or the deadline."""
         # Set before reading _env; _run sets _env before checking: one side always sees the other.
         self._stop.set()
@@ -189,7 +197,7 @@ def verify_patch(config: Config, archive: Path, image: str, patch_path: Path) ->
     return report
 
 
-def patch_files(env, base: str = "HEAD", *, probe: bool = False) -> list[str]:
+def patch_files(env: Sandbox, base: str = "HEAD", *, probe: bool = False) -> list[str]:
     index = f"GIT_INDEX_FILE={PROBE_INDEX} " if probe else ""
     names = env.checked(f"{index}git diff --cached --name-only -z {base}").rstrip("\0")
     return names.split("\0") if names else []
@@ -200,11 +208,11 @@ def make_gate(
     policy: Policy,
     archive: Path,
     image: str,
-    env,
+    env: Sandbox,
     state: dict,
-    base="HEAD",
+    base: str = "HEAD",
     baseline: Baseline | None = None,
-):
+) -> Callable[[str], GateResult]:
     """Deterministic gate for agent submissions and verifier-triggered early stop.
 
     Verification runs in fresh containers from the original snapshot, never in the agent's
@@ -261,7 +269,14 @@ def make_gate(
     return gate
 
 
-def run(config: Config, model, policy: Policy | None = None) -> dict:
+def run(config: Config, model: Model, policy: Policy | None = None) -> dict:
+    """Baseline, bounded agent session, and verification in fresh containers for one job.
+
+    The policy caps the requested budget. The baseline must reproduce the failure unless
+    `config.failure_reproduced`; the agent works in a disposable container; only the fresh
+    verification of the extracted patch can make the result `PASS`. Writes `report.json`,
+    `patch.diff` and the trajectory under `config.output` and returns the report.
+    """
     policy = policy or Policy.permissive()
     config.validate()
     requested = {
@@ -315,7 +330,7 @@ def run(config: Config, model, policy: Policy | None = None) -> dict:
         context = build_context(config, log, policy)
         (config.output / "context.json").write_text(context + "\n")
         # The agent's first calls only read logs and code, so they need not wait for the baseline.
-        baseline = Baseline(config, archive, image)
+        baseline = None if config.failure_reproduced else Baseline(config, archive, image)
         phase = "agent"
         with workspace(archive, image, config.command_seconds, config.wall_seconds) as env:
             # Diff against the recorded baseline so an agent commit cannot hide changes.
@@ -342,12 +357,13 @@ def run(config: Config, model, policy: Policy | None = None) -> dict:
             report["patch_sha256"] = hashlib.sha256(patch).hexdigest()
             paths = patch_files(env, base) if patch else []
         phase = "baseline"
-        record = baseline.result()
-        state["command_seconds"] += record["duration_seconds"]
-        if not reproduced(record):
-            report["status"] = "BASELINE_NOT_REPRODUCED"
-            report["stop_reason"] = StopReason.BASELINE_NOT_REPRODUCED.value
-            return report
+        if baseline is not None:
+            record = baseline.result()
+            state["command_seconds"] += record["duration_seconds"]
+            if not reproduced(record):
+                report["status"] = "BASELINE_NOT_REPRODUCED"
+                report["stop_reason"] = StopReason.BASELINE_NOT_REPRODUCED.value
+                return report
         if not patch:
             report["status"] = "NO_PATCH"
             return report
@@ -372,8 +388,11 @@ def run(config: Config, model, policy: Policy | None = None) -> dict:
             report["verification_source"] = "final"
     except (Exception, RunDeadline) as exc:
         report["status"] = "TIMEOUT" if isinstance(exc, RunDeadline) else "ERROR"
-        # Avoid serializing provider exceptions: these can contain request credentials.
-        report["error_type"] = type(exc).__name__
+        # Provider exceptions can contain request credentials: the shared report keeps the type.
+        if isinstance(exc, RunDeadline):
+            report["error_type"] = type(exc).__name__
+        else:
+            report.update(record_error(config.output, exc))
         report["error_phase"] = "baseline" if isinstance(exc, BaselineError) else phase
         if isinstance(exc, RunDeadline):
             report["stop_reason"] = StopReason.WALL_TIME_LIMIT.value

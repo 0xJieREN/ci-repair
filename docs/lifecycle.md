@@ -102,10 +102,12 @@ source, and if the cumulative patch already passes this job's checks, mark
 `FIXED_BY_PRIOR` (no agent) → otherwise repair on a candidate repository that
 contains earlier repairs → commit. Each job's task also lists the other failed jobs of the run with the first
 error block of their logs (bounded, marked untrusted), because jobs of one run
-often share a cause. Each repair replays the failing command on its candidate in a
-separate container while the agent starts, because the agent's first calls only read
-logs and code. For a job with no earlier repairs the candidate is the original tree,
-so that is its only baseline. The gate waits for the baseline before it verifies
+often share a cause. A job with no earlier repairs replays its failing command on its
+candidate, which is the original tree, in a separate container while the agent
+starts, because the agent's first calls only read logs and code; that is its only
+baseline. A job with earlier repairs runs no second baseline: it already failed on
+the original source, and the prior check showed the candidate still fails it,
+possibly only in a step after the failing one. The gate waits for the baseline before it verifies
 anything, so no probe competes with it for CPU; if the failure does not reproduce,
 the session ends at the next step and the job is `BASELINE_NOT_REPRODUCED`, with the
 agent's edits discarded. Finally every `REPAIRED`/`FIXED_BY_PRIOR` job is
@@ -118,6 +120,9 @@ change, with its current failure as the log. The fix-up spends only what the
 repairs left of the run's budget (the per-job calls, cost and wall time times the
 jobs attempted) and is skipped (`SKIPPED_BUDGET`) when nothing is left. Only if a fix-up verifies are the jobs
 verified again; a job that is still broken keeps `REGRESSED` and the run fails.
+A job whose own repair failed (`REPAIR_FAILED`) but whose failure reproduced on the
+original source is then checked against the final patch too: a later repair may
+have fixed it, and it becomes `FIXED_BY_LATER`.
 Run status: `PASS` (every failed job
 verified), `PARTIAL`, `FAIL`, `UNSUPPORTED_ENVIRONMENT`, `PATCH_REJECTED`,
 `ERROR`. Only `PASS` is publishable, as one draft PR.
@@ -141,6 +146,15 @@ still the latest, the branch (or open PR) head still equals the run's
 `head_sha`, the head repository is not a fork, and policy admits it. One repair
 runs per repository/branch; an expired lease becomes `interrupted` and is never
 rerun silently. Stored errors contain only exception types.
+
+Reports, the queue and draft PR bodies can be shared, so an unexpected exception
+is recorded there by its type only (`error_type`). Its traceback goes to
+`error.log` beside the report (the job's `repair/` directory, the run directory,
+or `<state-dir>/runs/<key>/`; `<state-dir>/errors/<key>/` when the failure comes
+before the run has a directory), created with mode 0600, with credential-named
+environment values, bearer tokens and GitHub/provider key shapes replaced by
+`[REDACTED]`. `ci-repair-run` and `ci-repair-webhook` log per-job progress to
+stderr (`CI_REPAIR_LOG_LEVEL`, default `INFO`); stdout keeps their results.
 
 GitHub API access uses `gh` authentication (`GH_TOKEN` works, including an
 installation token minted for a GitHub App). Minting App tokens is not built in.

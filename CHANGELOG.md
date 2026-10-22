@@ -32,9 +32,256 @@ measurements live in [eval/README.md](eval/README.md).
 | 0.4.0 | 09-18…09-22 | `09afeb6`…`74c0d04` | Hardening, evaluation harnesses, then the automatic lifecycle: policy, stop gate, reconstruction, multi-job, webhook | Paired synthetic, historical and LCA pilots |
 | 0.5.0 | 09-23…09-28 | `a0a3377`…`v0.5.0` | Scope focus, live acceptance, replay fidelity on a real dataset, paired comparison with Pi, orchestration and verification efficiency | Live webhook→draft PR; 39/68 LCA tasks usable; 234 + 21 paired trials; −53% wall time from lean verification (round 3, 117 trials) |
 | 0.6.0 | 09-28 | `4504d62`…`v0.6.0` | Remove the manual single-job path; evaluation never scores provider failures; past results in one place | Full gate 240 passed; round 3 completed by a rerun with no provider errors |
-| Unreleased | 09-28…10-02 | `82090ad`… | Baseline alongside the agent; a checkable evaluation contract; failure analysis; a prompt intervention against it | 10.8 s of baseline per trial overlapped (round 4, 39 trials × 1); all 111 passing patches of round 3 stay within the upstream fix's files; 16 of 19 failures are one behaviour; the intervention is inconclusive (8/12 against 6/12 on 4 tasks, run `36970961464`) |
+| Unreleased | 09-28…10-22 | `82090ad`… | Baseline alongside the agent; a checkable evaluation contract; failure analysis; a prompt intervention against it; the run loop tested without Docker; private tracebacks and typed signatures; the evaluation record recomputed from archived evidence; README and developer guide | 10.8 s of baseline per trial overlapped (round 4, 39 trials × 1); all 111 passing patches of round 3 stay within the upstream fix's files; 16 of 19 failures are one behaviour; the intervention is inconclusive (8/12 against 6/12 on 4 tasks, run `36970961464`); every result table of `eval/README.md` recomputed from 76 MB of archived evidence (`eval/reproduce.py --check`); unit gate 236 → 290 tests, coverage 81% → 89% |
 
 ## [Unreleased]
+
+### Stage D1: README, developer guide and entry-point docstrings (2026-10-22, `8a395b8`)
+
+**Motivation.** The README described what the system does and its results, but not
+why it exists, how one job's repair is isolated, what was traded away, or what it
+cannot do yet. There was no developer guide, and the core entry points
+(`repair_run`, `pipeline.run`, `RepairAgent`, `Policy`) had no docstrings.
+
+**Added**
+- README: a one-line summary, the motivation, a second diagram of one job's
+  isolation (host, agent container, baseline container, fresh verifiers), a module
+  table, a quickstart that needs no key or Docker, design trade-offs, limitations
+  and a roadmap. Each claim cites the evaluation record or the lifecycle document.
+- `CONTRIBUTING.md`: setup, the gate and the Colima rule, a code map, test
+  conventions (fakes, the scripted model, the Docker marker), style, commits and
+  the changelog, and the evaluation workflow from hosted run to archived evidence.
+- Docstrings for the main entry points of `agent`, `context`, `orchestrate`,
+  `pipeline`, `policy`, `publish`, `webhook` and `workspace`.
+
+**Verification.** `scripts/check.sh --unit`: 290 passed, 14 skipped. Every number in
+the new README sections is in `eval/README.md` or `eval/results/reproduced.md`.
+
+**Known limits.** The roadmap lists intentions, not measured work.
+
+### Stage E3: the evaluation record recomputed from archived evidence (2026-10-22, `9d4aa96`)
+
+**Motivation.** Every number in `eval/README.md` came from hosted runs whose
+artifacts GitHub deletes after 90 days. The scripts that computed them read the
+downloaded runs under `runs/`, which is not committed, so no reader could check a
+table, and nothing stopped a table from drifting from its data. One row of the
+session table (the single `FAIL` session) was missing, and the bootstrap interval
+of round 1 came from a computation that was not kept.
+
+**Added**
+- `eval/results/`: the evidence of the seven runs behind the record (3,064 files,
+  76 MB; about 12 MB once Git compresses it): per-trial results and patches, CI
+  Repair's reports and baselines, the agent trajectories, and the replay's upstream
+  reference diffs. `eval/results/README.md` maps each directory to its run, commit
+  and round.
+- `eval/archive.py` copies that evidence out of a `gh run download` directory. It
+  refuses a run whose files hold a host credential value or a provider/GitHub token
+  format (`ci_repair.diagnostics.has_credential`).
+- `eval/reproduce.py` recomputes every result table of the record (all but LCA
+  static coverage, which reads the dataset) with no model, container or network,
+  in about a second. `--check` exits 1 if a table row in `eval/README.md` is not
+  reproduced verbatim; `eval/results/reproduced.md` keeps the output.
+- `tests/test_eval_results.py` runs the check, keeps `reproduced.md` current, and
+  covers the grader's scoring rule (`compare.grade`): every job must pass in a fresh
+  container, no patch is a failure, `REVIEW` passes but is not auto-publishable,
+  `DENY` fails even when the checks pass.
+
+**Changed**
+- `eval/README.md`: the session table gains its `FAIL` row; two table rows lose
+  bold so they match the recomputation; the round 1 bootstrap interval is
+  [−12.9, 0.0] (10,000 resamples of the 13 repositories, seed 0) instead of the
+  unreproducible [−13.1, 0.0]. The conclusion (borderline) is unchanged. The two
+  notes on jobs not rechecked against the final patch now point to `464a741`.
+- `audit.py` returns its counts (`count`) separately from the text; `trajectories.py`
+  labels rows as the record does; `lca_coverage.py` imports pyarrow only to read
+  the dataset, so the summaries run without it.
+
+**Verification.** `uv run python eval/reproduce.py --check` exits 0: every table
+row of `eval/README.md` other than static coverage is recomputed from
+`eval/results/`. Before the change, the scripts alone reproduced rounds 1 and 3,
+the audit's round 3 column and the session table's numbers. The archive was
+scanned with `has_credential`: no host value and no token format; the 67 files the
+broader mask matched hold the repaired projects' code and test placeholders.
+`scripts/check.sh --unit`: 290 passed, 14 skipped; `--colima`: 304 passed.
+
+**Known limits.** The archive replaces the expired artifacts only for these seven
+runs; earlier pilots in `docs/` cite runs whose evidence is gone. The check
+compares table rows, not the numbers quoted in prose; `reproduced.md` lists those
+figures for review. No paid run was made, so `FIXED_BY_LATER` (`464a741`) is
+untested against real tasks.
+
+### Stage R1: private tracebacks, progress logs and typed signatures (2026-10-22, `246503b`)
+
+**Motivation.** A failed run recorded only the exception type. That protects the
+shared report, because provider and GitHub errors can echo credentials, but it
+left the operator nothing to debug. A long run printed nothing until its final
+line. `python-dotenv` was imported by three `--env-file` options but not declared,
+so it was present only through mini-swe-agent's dependencies. About thirty public
+functions had untyped parameters or return values.
+
+**Added**
+- `ci_repair.diagnostics.record_error`: writes the traceback to `error.log`
+  beside the report with mode 0600. It masks credential-named environment values,
+  bearer tokens, labelled keys (`api_key=`, `token:`) and GitHub/provider key
+  shapes. The report, queue row and webhook result still hold only `error_type`,
+  now with `error_log: "error.log"`. The pipeline, the orchestrator and the
+  webhook worker use it; a timeout records no traceback. A failure before the
+  webhook run has its directory is logged under `<state-dir>/errors/<key>/`, so a
+  requeued attempt keeps its plain run directory name.
+- Per-job progress (`building the environment`, `repair agent started`, final
+  status) on stderr through the `ci_repair` logger, for `ci-repair-run`,
+  `ci-repair-webhook` and `eval/compare.py`. `CI_REPAIR_LOG_LEVEL` sets the
+  level. The handler is attached to `ci_repair` only, because mini-swe-agent's
+  logger is at DEBUG and propagates to the root.
+
+**Changed**
+- `python-dotenv>=1,<2` is a declared dependency; the locked version is unchanged.
+- Public functions in `github`, `orchestrate`, `pipeline`, `policy`, `publish`,
+  `reconstruct`, `webhook`, `workspace` and `model` have parameter and return
+  annotations (`Model`, `Sandbox`, `Callable[..., dict]`, `Iterator[Sandbox]`).
+  `model.py` imports `Model` for type checking only, so mini is still imported
+  after `make_model` sets its environment.
+
+**Verification.** `scripts/check.sh --unit`: 279 passed, 14 skipped.
+`tests/test_diagnostics.py` covers masking, the file mode (also when a 0644 file
+existed), an unwritable directory and the logger scope. The existing error tests
+of the pipeline, the orchestrator and the webhook now also check the private log;
+one webhook test covers a failure before the run directory exists. Pyright 1.1.390
+(not part of the gate) reports 17 errors in `src/`, all from dynamic YAML/JSON
+values; none is in a signature annotated here.
+
+**Known limits.** Masking matches known shapes and this process's environment; a
+credential in another format can still reach `error.log`, which is why the file
+is owner-only and never published. `_repair_run` is still one ~250-line
+function: its phases share the candidate repository, the cumulative patch and the
+budget, so splitting it would need a state object that adds code without removing
+any.
+
+### Stage F4: changed lines that look like file headers are counted (2026-10-22, `6c6257b`)
+
+**Motivation.** `patch_stats` skipped every line starting with `---` or `+++` to leave
+out file headers. Inside a hunk such a line is a removed `-- ...` line (an SQL or
+Lua comment) or an added `++...` line, so those changes were not counted against
+`patch.max_changed_lines`. `eval/compare.py` had its own copy of the same count.
+
+**Fixed**
+- Lines are counted only inside hunks: between a `@@` line and the next
+  `diff --git` header.
+- `eval/compare.py` uses `patch_stats` instead of its copy.
+
+**Verification.** A new test with both kinds of line failed before the fix. One
+existing test used a hand-written patch without `diff --git` and `@@` lines, which
+`git diff` never produces; it now uses a well-formed patch. The 296 recorded CI
+Repair patches under `runs/` get the same count as before, so no recorded policy
+decision changes. `scripts/check.sh --unit`: 268 passed.
+
+**Known limits.** A patch without hunk headers now counts zero changed lines; every
+patch the system checks comes from `git diff --binary`.
+
+### Stage F3: generated output in subdirectories is classified as generated (2026-10-22, `dff15ea`)
+
+**Motivation.** The `generated` category (DENY by default) listed `dist/*`, `build/*`,
+`vendor/*` and `node_modules/*`. A pattern containing `/` is matched against the whole
+path, so these matched only at the repository root: a change to
+`packages/web/dist/app.js` or to a nested `node_modules/` was not classified, and a
+patch that edited build output could be ALLOW.
+
+**Fixed**
+- The four output directories match at any depth (`*/dist/*` and so on), the idiom
+  `PROTECTED` already uses for `*/ci-repair-policy*`.
+
+**Verification.** New cases in `tests/test_policy.py` (nested `dist/`,
+`node_modules/`, `vendor/`; `src/distribute.py` stays uncategorized) failed before
+the fix. None of the 40 distinct files changed by recorded CI Repair trials, nor
+any file in the archived upstream fixes of run `36124065326`, lies under such a
+directory, so no recorded grade changes. `scripts/check.sh --unit`: 267 passed.
+
+**Known limits.** A source package named `build`, `dist` or `vendor` below the root
+(for example `src/build/`) is now DENY by default, as a root-level one already was.
+An operator can relax `patch.categories.generated` to REVIEW.
+
+### Stage F2: a job failing only in a later step after earlier repairs gets its agent (2026-10-22, `349cc2b`)
+
+**Motivation.** A job with earlier repairs was checked on the original source, then
+repaired on the candidate, where the pipeline ran the failing command again as its
+baseline. If the earlier repairs made the failing step pass while a later step of
+the same job still failed, that second baseline passed and the session ended
+`BASELINE_NOT_REPRODUCED`: the job was mislabeled and no repair was attempted. A
+fix-up had the same gap.
+
+**Fixed**
+- `Config.failure_reproduced` tells the pipeline that the caller has shown the
+  source fails the job's checks; the pipeline then runs no baseline. The
+  orchestrator sets it for jobs with earlier repairs (original baseline plus the
+  failed prior check) and for fix-ups (failed final verification).
+- These jobs no longer spend one container run on a redundant baseline.
+
+**Verification.** New tests: in `tests/test_orchestrate_flow.py` a job whose failed
+step an earlier repair fixed, but whose next step still fails, is repaired and the
+run ends `PASS`; it ended `BASELINE_NOT_REPRODUCED` and `PARTIAL` before the fix. A
+pipeline with `failure_reproduced` starts no baseline container. The fake
+verification now checks a distinct regression command, as `verify_patch` does.
+`scripts/check.sh --unit`: 262 passed.
+
+**Known limits.** No recorded trial is known to have hit this; it was found by
+reading the code. These sessions no longer stop early on an unreproduced baseline;
+for them that stop could only fire on a step that an earlier repair already fixed.
+
+### Stage F1: a job a later repair fixed is no longer reported unrepaired (2026-10-22, `464a741`)
+
+**Motivation.** E2 found one trial (task 26, round 4) that passed the grader but
+was reported `PARTIAL`: the first job's agent failed, the second job's repair fixed
+both jobs, and final verification checked only `REPAIRED` and `FIXED_BY_PRIOR` jobs.
+Such a run could not be published although its patch was verified.
+
+**Fixed**
+- After final verification, each `REPAIR_FAILED` job whose failure reproduced on the
+  original source is verified against the final patch in fresh containers. If it
+  passes it becomes `FIXED_BY_LATER` and counts toward a run `PASS`; otherwise it
+  stays `REPAIR_FAILED`, now with `final_verification`.
+- A job whose session ended before its baseline finished (for example a provider
+  error) has no reproduced failure and is never credited this way.
+
+**Verification.** New tests in `tests/test_orchestrate_flow.py`: the task-26 shape
+(first agent makes no change, second repair fixes both) now ends `PASS`; it failed
+before the fix. A session that errors before its baseline stays `REPAIR_FAILED`.
+`scripts/check.sh --unit`: 260 passed.
+
+**Known limits.** Not rerun on task 26 itself; the claim rests on the test that
+reproduces its shape. A failed check costs one more container run per unrepaired job.
+
+### Stage T1: the run loop tested without Docker (2026-10-22, `8f5d0da`)
+
+**Motivation.** Without Docker the unit gate covered 63% of `orchestrate.py`. The
+run loop's branches (a job fixed by an earlier repair, a failed fix-up, the job
+budget, a failed setup) ran only in the opt-in Docker tests, which cover four of
+them. Nothing exercised the whole chain from a webhook delivery to a draft PR, and
+`build_environment` was tested only by building real images.
+
+**Added**
+- `tests/test_orchestrate_flow.py`: ten run-level cases with containers and the
+  agent replaced by a file-level fake. Each replayed check is a predicate on the
+  source tree; Git candidate state, reconstruction, ordering, budgets, policy and
+  the run report are real.
+- `tests/test_end_to_end.py`: a signed webhook delivery goes through the SQLite
+  queue, the canonical re-check, collection, the orchestrator and the publication
+  gate to a draft PR. GitHub, Docker and the model are faked; the push goes to a
+  local bare repository. Two more cases cover a policy without an allowed default
+  model and a refused publication.
+- `tests/test_environment_build.py`: `build_environment` against a scripted
+  `docker`. It checks the setup network chosen by policy, no host mounts, the
+  offline checkout, no image after a failed setup, container removal after any
+  error, image reuse, and separate tags for setup variants.
+
+**Verification.** `scripts/check.sh --unit`: 258 passed, 14 skipped (Docker), up
+from 236. Line coverage of the unit gate (`coverage run -m pytest`, not part of the
+gate): 81% → 89% overall; `orchestrate.py` 63% → 90%, `reconstruct.py` 76% → 87%,
+`webhook.py` 80% → 87%.
+
+**Known limits.** The fakes restate the pipeline's contract (baseline, patch,
+verification); if the real contract changes, these tests can pass while the Docker
+tests fail. `workspace.py` stays at 70%: its uncovered lines are the Docker sandbox
+itself.
 
 ### Stage P1: write the repair instead of searching for it (2026-10-02, `5427d2a`)
 
@@ -109,7 +356,7 @@ in full; the rest were classified by the counts. The cause of the search is not
 established. The task context names a commit the workspace cannot resolve, which
 every `NO_PATCH` session mentions, but Pi searches without it. One trial (task 26,
 round 4) shows a separate gap: a job whose repair failed is not checked against the
-final patch, so a run a later repair completed is reported `PARTIAL`.
+final patch, so a run a later repair completed is reported `PARTIAL` (fixed in F1).
 
 ### Stage E1: an evaluation contract that can be checked (2026-10-02, `d500884`)
 

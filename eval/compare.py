@@ -31,9 +31,10 @@ from lca_coverage import dataset, job_specs, runner_hint
 from lca_replay import checkout, mirror_env
 
 from ci_repair.context import failure_evidence
+from ci_repair.diagnostics import configure_logging
 from ci_repair.orchestrate import order_jobs, repair_run
 from ci_repair.pipeline import Config, verify_patch, write_json
-from ci_repair.policy import Policy, Verdict, categorize
+from ci_repair.policy import Policy, Verdict, categorize, patch_stats
 from ci_repair.reconstruct import (
     UNSUPPORTED,
     build_environment,
@@ -365,10 +366,7 @@ def grade(prep: dict, patch: bytes, trial: Path) -> dict:
         "jobs": results,
         "policy": decision.to_dict(),
         "changed_files": changed,
-        "changed_lines": sum(
-            line.startswith((b"+", b"-")) and not line.startswith((b"+++", b"---"))
-            for line in patch.splitlines()
-        ),
+        "changed_lines": patch_stats(patch)["changed_lines"],
         "touches_tests": any("tests" in categorize(p) for p in changed),
     }
 
@@ -524,6 +522,7 @@ def main():
     parser.add_argument("--keep-images", action="store_true")
     parser.add_argument("--arms", default=",".join(ARMS), help="Comma-separated subset of arms")
     args = parser.parse_args()
+    configure_logging()
     args.output = args.output.resolve()  # git runs inside checkouts; paths must be absolute
     if args.summarize:
         print(summarize(args.output), end="")

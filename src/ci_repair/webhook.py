@@ -14,11 +14,14 @@ import sqlite3
 import tempfile
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
+from email.message import Message
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from ci_repair import github
+from ci_repair.diagnostics import configure_logging, record_error
 from ci_repair.policy import Policy, PolicyError, load_policy
 
 MAX_BODY = 2 * 1024 * 1024
@@ -52,7 +55,7 @@ class Store:
         self.lock = threading.Lock()
         self.db.executescript(SCHEMA)
 
-    def execute(self, sql: str, params=()):
+    def execute(self, sql: str, params: tuple = ()) -> list:
         with self.lock:
             return self.db.execute(sql, params).fetchall()
 
@@ -106,7 +109,7 @@ class Store:
             return None
         return dict(zip(("key", "repository", "run_id", "attempt", "branch"), row))
 
-    def finish(self, key: str, status: str, result: dict):
+    def finish(self, key: str, status: str, result: dict) -> None:
         self.execute(
             "UPDATE repairs SET status=?, result=?, updated_at=?, lease_until=NULL WHERE key=?",
             (status, json.dumps(result, default=str), time.time(), key),
@@ -128,7 +131,9 @@ class Intake:
     outcome: str
 
 
-def intake(store: Store, secret: bytes, headers, body: bytes, policy: Policy) -> Intake:
+def intake(
+    store: Store, secret: bytes, headers: Mapping[str, str] | Message, body: bytes, policy: Policy
+) -> Intake:
     """Authenticate, filter and enqueue; never executes anything."""
     if not verify_signature(secret, body, headers.get("X-Hub-Signature-256")):
         return Intake(401, "invalid signature")
@@ -229,15 +234,22 @@ def default_repair(item: dict, directory: Path, policy: Policy) -> dict:
 def process_one(
     store: Store, policy: Policy, state_dir: Path, repair=default_repair
 ) -> dict | None:
+    """Claim one queued delivery, recheck it against GitHub and the policy, and repair it.
+
+    Returns the stored result, or None when the queue is empty. A failure is recorded as
+    the item's result with a private traceback, never raised to the worker loop.
+    """
     item = store.claim()
     if item is None:
         return None
+    name = item["key"].replace("/", "__").replace("#", "-")
+    directory = state_dir / "errors" / name  # until the run has its own directory
     try:
         reason, _ = canonical_check(item, policy)
         if reason:
             result, status = {"skipped": reason}, "skipped"
         else:
-            directory = state_dir / "runs" / item["key"].replace("/", "__").replace("#", "-")
+            directory = state_dir / "runs" / name
             try:
                 directory.mkdir(parents=True, exist_ok=False, mode=0o700)
             except FileExistsError:
@@ -247,13 +259,15 @@ def process_one(
                 )
             result, status = repair(item, directory, policy), "done"
     except Exception as exc:
-        # External error text can include credentials; persist only the type.
-        result, status = {"error_type": type(exc).__name__}, "failed"
+        # External error text can include credentials; the queue keeps only the type.
+        result, status = record_error(directory, exc), "failed"
     store.finish(item["key"], status, result)
     return {**item, "status": status, "result": result}
 
 
-def make_handler(store: Store, secret: bytes, policy: Policy, wake: threading.Event):
+def make_handler(
+    store: Store, secret: bytes, policy: Policy, wake: threading.Event
+) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             if self.path != "/webhook":
@@ -283,14 +297,16 @@ def make_handler(store: Store, secret: bytes, policy: Policy, wake: threading.Ev
     return Handler
 
 
-def worker(store: Store, policy: Policy, state_dir: Path, wake: threading.Event, stop):
+def worker(
+    store: Store, policy: Policy, state_dir: Path, wake: threading.Event, stop: threading.Event
+) -> None:
     while not stop.is_set():
         if process_one(store, policy, state_dir) is None:
             wake.wait(timeout=30)
             wake.clear()
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
     serve = sub.add_parser("serve", help="Receive webhooks and process the queue")
@@ -306,6 +322,7 @@ def main():
         command_parser.add_argument("--policy", type=Path, required=True)
         command_parser.add_argument("--env-file", type=Path)
     args = parser.parse_args()
+    configure_logging()
     try:
         policy = load_policy(args.policy, untrusted_roots=[args.state_dir])
     except (PolicyError, OSError) as exc:

@@ -4,6 +4,7 @@ import hashlib
 import shlex
 import subprocess
 import tarfile
+from collections.abc import Iterator
 from contextlib import contextmanager
 from functools import cached_property
 from pathlib import Path
@@ -15,7 +16,7 @@ def command(args: list[str], *, cwd: Path | None = None, timeout: int = 60) -> b
     return subprocess.run(args, cwd=cwd, check=True, capture_output=True, timeout=timeout).stdout
 
 
-def checkout_commit(repo: Path, sha: str):
+def checkout_commit(repo: Path, sha: str) -> None:
     """Avoid another network fetch when the shallow clone already contains this commit."""
     try:
         command(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=repo)
@@ -24,7 +25,7 @@ def checkout_commit(repo: Path, sha: str):
     command(["git", "checkout", "--detach", sha], cwd=repo)
 
 
-def check_archive(repo: Path, archive: Path, sha: str):
+def check_archive(repo: Path, archive: Path, sha: str) -> None:
     """git archive can silently omit/transform files via export-ignore/export-subst."""
     entries = command(["git", "ls-tree", "-rz", sha], cwd=repo).split(b"\0")
     expected = {}
@@ -115,7 +116,7 @@ class Sandbox(DockerEnvironment):
             result["exception_info"] = "Command timed out or was killed inside the container"
         return result
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         if getattr(self, "container_id", None):
             container_id, self.container_id = self.container_id, None
             subprocess.run(
@@ -125,7 +126,7 @@ class Sandbox(DockerEnvironment):
                 check=False,
             )
 
-    def copy(self, source: Path, destination: str):
+    def copy(self, source: Path, destination: str) -> None:
         command(["docker", "cp", str(source), f"{self.container_id}:{destination}"])
 
     def checked(self, script: str) -> str:
@@ -136,7 +137,8 @@ class Sandbox(DockerEnvironment):
 
 
 @contextmanager
-def workspace(archive: Path, image: str, timeout: int, lifetime: int):
+def workspace(archive: Path, image: str, timeout: int, lifetime: int) -> Iterator[Sandbox]:
+    """A disposable container with the source unpacked: no network or capabilities, capped."""
     env = Sandbox(
         image=image,
         cwd="/workspace",

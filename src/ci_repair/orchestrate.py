@@ -9,16 +9,20 @@ to the original snapshot, in fresh containers with that job's reconstructed envi
 import argparse
 import hashlib
 import json
+import logging
 import os
 import subprocess
 import tarfile
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+
+from minisweagent import Model
 
 from ci_repair.agent import StopReason
 from ci_repair.context import evidence_overlap, failure_evidence
+from ci_repair.diagnostics import configure_logging, record_error
 from ci_repair.github import CollectionError, load_context
 from ci_repair.pipeline import Config, reproduced, run_test, verify_patch, write_json
 from ci_repair.pipeline import run as run_pipeline
@@ -47,13 +51,15 @@ FIXED_DATE = {
     "GIT_COMMITTER_DATE": "2000-01-01T00:00:00Z",
 }
 
+logger = logging.getLogger(__name__)
+
 
 def order_jobs(entries: list[dict], doc: dict | None) -> tuple[list[dict], list[str]]:
     """Dependencies first (transitive `needs`), then workflow position, name and job ID."""
     jobs = (doc or {}).get("jobs", {}) if isinstance(doc, dict) else {}
     keys = list(jobs)
 
-    def needs(key):
+    def needs(key: str | None) -> set[str]:
         seen, stack = set(), [key]
         while stack:
             value = jobs.get(stack.pop(), {})
@@ -109,7 +115,7 @@ def tree(path: Path) -> str:
     return command(["git", "rev-parse", "HEAD^{tree}"], cwd=path).decode().strip()
 
 
-def git_commit(path: Path, message: str):
+def git_commit(path: Path, message: str) -> None:
     subprocess.run(
         ["git", *GIT_IDENTITY, "commit", "-q", "--allow-empty", "-m", message],
         cwd=path,
@@ -124,6 +130,7 @@ SIBLING_BUDGET = 2000
 
 
 def job_task(meta: dict, prior: list[str], others: list[dict] | None = None) -> str:
+    """The task text for one job's session: its failure, earlier jobs' changes, sibling excerpts."""
     task = (
         f"GitHub Actions job {meta['job_name']!r} failed in run {meta['run_id']} "
         f"(step: {', '.join(meta.get('failed_steps') or ['unknown'])})."
@@ -155,10 +162,18 @@ def repair_run(
     collection: Path,
     output: Path,
     *,
-    model_factory: Callable[[], object],
+    model_factory: Callable[[], Model],
     policy: Policy,
-    build=build_environment,
+    build: Callable[..., dict] = build_environment,
 ) -> dict:
+    """Repair every failed job of a collected run into one cumulative patch.
+
+    Jobs are repaired in order on one candidate tree, each committed before the next
+    starts. A job the earlier patches already fix is not repaired. At the end every job
+    is verified again against the final patch in fresh containers, and a job broken by a
+    later repair gets one fix-up session. Writes `report.json` and `patch.diff` under
+    `output` and returns the report.
+    """
     manifest = json.loads((collection / "run.json").read_text())
     if manifest.get("schema_version") != 1:
         raise ValueError("Unsupported run manifest")
@@ -194,16 +209,22 @@ def repair_run(
     except CollectionError as exc:
         report.update(status="ERROR", stop_reason=StopReason.STALE_SOURCE.value, error=str(exc))
     except Exception as exc:
-        report.update(
-            status="ERROR",
-            stop_reason=StopReason.EXECUTION_ERROR.value,
-            error_type=type(exc).__name__,
-        )
+        report.update(status="ERROR", stop_reason=StopReason.EXECUTION_ERROR.value)
+        report.update(record_error(output, exc))
     write_json(output / "report.json", report)
     return report
 
 
-def _repair_run(collection, output, repo, manifest, report, model_factory, policy, build):
+def _repair_run(
+    collection: Path,
+    output: Path,
+    repo: Path,
+    manifest: dict,
+    report: dict,
+    model_factory: Callable[[], Model],
+    policy: Policy,
+    build: Callable[..., dict],
+) -> dict:
     sha = clean_head(repo)
     if sha != manifest["commit"]:
         raise CollectionError("Collected checkout no longer matches the run commit")
@@ -262,6 +283,7 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
         "models_used": set(),
     }
     repaired_names: list[str] = []
+    failed_on_original: set[int] = set()  # jobs whose baseline reproduced on the original
     attempted = 0
     results = []
     for entry in ordered:
@@ -284,6 +306,7 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
             result["status"] = "SKIPPED_BUDGET"
             continue
         attempted += 1
+        logger.info("job %s (%s): building the environment", entry["job_id"], entry["job_name"])
         built = build(spec, archive, job_dir, policy)
         write_json(job_dir / "build.json", built)
         result["environment"].update(
@@ -315,6 +338,7 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
             if not reproduced(baseline):
                 result["status"] = "BASELINE_NOT_REPRODUCED"
                 continue
+            failed_on_original.add(entry["job_id"])
             result["baseline_matches_ci_log"] = evidence_overlap(ci_log, baseline.get("output", ""))
             (job_dir / "prior-check").mkdir()
             check = verify_patch(
@@ -336,19 +360,26 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
         ]
         task = job_task(entry["meta"], repaired_names, others)
         # Without earlier repairs the candidate is the original tree, so the pipeline's
-        # baseline, run alongside the agent, is this job's baseline.
-        repair = run_pipeline(replace(cfg, task=task), model_factory(), policy)
+        # baseline, run alongside the agent, is this job's baseline. With them, the job
+        # failed on the original source and the prior check showed the candidate still
+        # fails it, possibly only in a later step: the pipeline runs no baseline of its own.
+        logger.info("job %s: repair agent started", entry["job_id"])
+        repair = run_pipeline(
+            replace(cfg, task=task, failure_reproduced=prior), model_factory(), policy
+        )
         add_usage(usage, repair)
         result.update(repair_status=repair["status"], stop_reason=repair.get("stop_reason"))
         record = cfg.output / "baseline.json"
         if not prior and record.exists():
-            output_text = json.loads(record.read_text()).get("output", "")
-            result["baseline_matches_ci_log"] = evidence_overlap(ci_log, output_text)
+            baseline = json.loads(record.read_text())
+            result["baseline_matches_ci_log"] = evidence_overlap(ci_log, baseline.get("output", ""))
+            if reproduced(baseline):
+                failed_on_original.add(entry["job_id"])
         if repair["status"] == "BASELINE_NOT_REPRODUCED":
             result["status"] = "BASELINE_NOT_REPRODUCED"
             continue
         if not repair.get("verified"):
-            result["status"] = "REPAIR_FAILED"
+            result.update(status="REPAIR_FAILED", config=cfg)
             continue
         command(
             ["git", "apply", "--index", "--binary", str(cfg.output / "patch.diff")], cwd=candidate
@@ -368,7 +399,7 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
     )
     addressed = [r for r in results if r.get("status") in ("REPAIRED", "FIXED_BY_PRIOR")]
 
-    def verify_all(label: str, jobs: list[dict]) -> list[dict]:
+    def verify_all(label: str, jobs: list[dict], failed: str = "REGRESSED") -> list[dict]:
         """Jobs against the one cumulative patch, in fresh containers.
 
         A job whose checks already passed with a patch applied to the original snapshot that
@@ -390,7 +421,7 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
             result["final_verification"] = final["status"]
             found.extend(final.get("tests", []))
             if not final.get("verified"):
-                result["status"] = "REGRESSED"
+                result["status"] = failed
         return found
 
     tests = verify_all("verification", addressed) if cumulative.read_bytes() else []
@@ -420,6 +451,18 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
         # A failed fix-up stays REGRESSED; everything else is judged on the new patch.
         again = [r for r in addressed if r["status"] != "REGRESSED"]
         tests = verify_all("verification-after-fixup", again)
+    if cumulative.read_bytes():
+        # A later repair can fix a job whose own attempt failed. Its failure reproduced on
+        # the original source, so passing with the final patch is what FIXED_BY_PRIOR needs.
+        unrepaired = [
+            r
+            for r in results
+            if r["status"] == "REPAIR_FAILED" and r["job_id"] in failed_on_original
+        ]
+        tests += verify_all("verification-unrepaired", unrepaired, failed="REPAIR_FAILED")
+        for result in unrepaired:
+            if result["final_verification"] == "PASS":
+                result["status"] = "FIXED_BY_LATER"
     patch = cumulative.read_bytes()
     report["patch_sha256"] = hashlib.sha256(patch).hexdigest()
     report["usage"] = {**usage, "models_used": sorted(usage["models_used"])}
@@ -431,6 +474,7 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
     for result in results:
         result.pop("config", None)
         result.pop("evidence", None)
+        logger.info("job %s: %s", result["job_id"], result["status"])
     report["jobs"] = results
     report["tests"] = tests
     report.update(summarize(results, patch, report.get("policy_decision")))
@@ -441,15 +485,29 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
 SPENT = {"steps": "model_calls", "cost": "estimated_cost_usd", "wall_seconds": "wall_seconds"}
 
 
-def add_usage(usage: dict, repair: dict):
+def add_usage(usage: dict, repair: dict) -> None:
     for key in ("model_calls", "estimated_cost_usd", "agent_steps", "wall_seconds"):
         usage[key] += repair.get("usage", {}).get(key, 0)
     usage["models_used"].update(repair.get("usage", {}).get("models_used", []))
 
 
 def fix_up(
-    result, addressed, output, candidate, cumulative, base, model_factory, policy, usage, total
-):
+    result: dict,
+    addressed: list[dict],
+    output: Path,
+    candidate: Path,
+    cumulative: Path,
+    base: str,
+    model_factory: Callable[[], Model],
+    policy: Policy,
+    usage: dict,
+    total: dict,
+) -> None:
+    """Repair a job that later repairs broke, within the budget the run has left.
+
+    The session sees the current failure from final verification. A verified fix-up is
+    committed on the candidate and `cumulative` is rewritten; `result["fixup"]` records it.
+    """
     cfg = result["config"]
     left = {key: total[key] - usage[spent] for key, spent in SPENT.items()}
     if left["steps"] < 1 or left["cost"] <= 0 or left["wall_seconds"] < 1:
@@ -479,7 +537,11 @@ def fix_up(
     )
     repair = run_pipeline(
         replace(
-            cfg, output=job_dir / "fixup", failure_log=job_dir / "fixup-failure.log", task=task
+            cfg,
+            output=job_dir / "fixup",
+            failure_log=job_dir / "fixup-failure.log",
+            task=task,
+            failure_reproduced=True,  # final verification just failed on this tree
         ),
         model_factory(),
         policy,
@@ -527,7 +589,7 @@ def first_failure(results: list[dict]) -> str:
     return StopReason.EXECUTION_ERROR.value
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("collection", type=Path, help="Output of ci-repair-github")
     parser.add_argument("--policy", type=Path, help="Operator policy YAML outside the repository")
@@ -536,6 +598,7 @@ def main():
     parser.add_argument("--env-file", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
+    configure_logging()
     collection = args.collection.resolve()
     try:
         policy = load_policy(args.policy, untrusted_roots=[collection])

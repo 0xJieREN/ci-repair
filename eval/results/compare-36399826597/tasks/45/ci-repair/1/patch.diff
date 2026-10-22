@@ -1,0 +1,95 @@
+diff --git a/src/diffusers/loaders/__init__.py b/src/diffusers/loaders/__init__.py
+index 675246e..03263f5 100644
+--- a/src/diffusers/loaders/__init__.py
++++ b/src/diffusers/loaders/__init__.py
+@@ -56,9 +56,9 @@ _import_structure = {}
+ if is_torch_available():
+     _import_structure["unet"] = ["UNet2DConditionLoadersMixin"]
+     _import_structure["utils"] = ["AttnProcsLayers"]
++    _import_structure["single_file"] = ["FromSingleFileMixin"]
+ 
+     if is_transformers_available():
+-        _import_structure["single_file"] = ["FromSingleFileMixin"]
+         _import_structure["lora"] = ["LoraLoaderMixin", "StableDiffusionXLLoraLoaderMixin"]
+         _import_structure["textual_inversion"] = ["TextualInversionLoaderMixin"]
+         _import_structure["ip_adapter"] = ["IPAdapterMixin"]
+@@ -68,13 +68,13 @@ _import_structure["peft"] = ["PeftAdapterMixin"]
+ 
+ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
+     if is_torch_available():
++        from .single_file import FromSingleFileMixin
+         from .unet import UNet2DConditionLoadersMixin
+         from .utils import AttnProcsLayers
+ 
+         if is_transformers_available():
+             from .ip_adapter import IPAdapterMixin
+             from .lora import LoraLoaderMixin, StableDiffusionXLLoraLoaderMixin
+-            from .single_file import FromSingleFileMixin
+             from .textual_inversion import TextualInversionLoaderMixin
+ 
+     from .peft import PeftAdapterMixin
+diff --git a/src/diffusers/loaders/single_file.py b/src/diffusers/loaders/single_file.py
+index d23b2b9..e3ecae4 100644
+--- a/src/diffusers/loaders/single_file.py
++++ b/src/diffusers/loaders/single_file.py
+@@ -15,7 +15,6 @@ import os
+ import re
+ 
+ from huggingface_hub.utils import validate_hf_hub_args
+-from transformers import AutoFeatureExtractor
+ 
+ from ..models.modeling_utils import load_state_dict
+ from ..utils import (
+@@ -117,6 +116,8 @@ def build_sub_model_components(
+ 
+     if component_name == "safety_checker":
+         if load_safety_checker:
++            from transformers import AutoFeatureExtractor
++
+             from ..pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
+ 
+             safety_checker = StableDiffusionSafetyChecker.from_pretrained(
+diff --git a/src/diffusers/loaders/single_file_utils.py b/src/diffusers/loaders/single_file_utils.py
+index 475b7d3..cbbcaa7 100644
+--- a/src/diffusers/loaders/single_file_utils.py
++++ b/src/diffusers/loaders/single_file_utils.py
+@@ -21,12 +21,6 @@ from urllib.parse import urlparse
+ 
+ import requests
+ import yaml
+-from transformers import (
+-    CLIPTextConfig,
+-    CLIPTextModel,
+-    CLIPTextModelWithProjection,
+-    CLIPTokenizer,
+-)
+ 
+ from ..models import UNet2DConditionModel
+ from ..schedulers import (
+@@ -902,6 +896,8 @@ def convert_ldm_vae_checkpoint(checkpoint, config):
+ 
+ 
+ def create_text_encoder_from_ldm_clip_checkpoint(config_name, checkpoint, local_files_only=False):
++    from transformers import CLIPTextConfig, CLIPTextModel
++
+     try:
+         config = CLIPTextConfig.from_pretrained(config_name, local_files_only=local_files_only)
+     except Exception:
+@@ -944,6 +940,8 @@ def create_text_encoder_from_open_clip_checkpoint(
+     local_files_only=False,
+     **config_kwargs,
+ ):
++    from transformers import CLIPTextConfig, CLIPTextModel, CLIPTextModelWithProjection
++
+     try:
+         config = CLIPTextConfig.from_pretrained(config_name, **config_kwargs, local_files_only=local_files_only)
+     except Exception:
+@@ -1095,6 +1093,8 @@ def create_text_encoders_and_tokenizers_from_ldm(
+     model_type=None,
+     local_files_only=False,
+ ):
++    from transformers import CLIPTokenizer
++
+     model_type = infer_model_type(original_config, model_type=model_type)
+ 
+     if model_type == "FrozenOpenCLIPEmbedder":

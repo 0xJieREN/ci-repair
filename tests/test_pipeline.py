@@ -262,6 +262,33 @@ def test_model_outside_policy_is_denied_before_any_work(tmp_path, monkeypatch):
     assert report["stop_reason"] == "POLICY_DENIED"
 
 
+def test_a_failure_the_caller_reproduced_runs_no_baseline(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    cfg = replace(config(tmp_path), failure_reproduced=True)
+    opened = []
+
+    class Env(PatchedEnv):
+        def execute(self, action):
+            # The failing command passes on this source; only a later check failed.
+            return {"returncode": 0, "output": "out", "exception_info": ""}
+
+    @contextmanager
+    def factory(*args):
+        opened.append(threading.current_thread().name)
+        yield Env()
+
+    monkeypatch.setattr(pipeline, "workspace", factory)
+    monkeypatch.setattr(pipeline, "snapshot", lambda *args: "abc")
+    monkeypatch.setattr(pipeline, "command", lambda *args: b"sha256:image")
+    monkeypatch.setattr(pipeline, "extract_patch", lambda *args, **kwargs: b"patch")
+    monkeypatch.setattr(pipeline, "RepairAgent", FakeAgent)
+    report = run(cfg, object())
+    assert report["status"] == "PASS"
+    assert not any(name.startswith("baseline") for name in opened)
+    assert not (cfg.output / "baseline.json").exists()
+
+
 @pytest.mark.parametrize("regression,phases", [("test-all", 4), ("test-one", 3)])
 def test_identical_checks_run_once(tmp_path, monkeypatch, regression, phases):
     from dataclasses import replace
@@ -348,6 +375,7 @@ def test_agent_error_stops_the_pending_baseline(tmp_path, monkeypatch):
     report = run(cfg, object())
     assert report["status"] == "ERROR" and report["error_phase"] == "agent"
     assert killed.is_set() and time.monotonic() - started < 5
+    assert "provider failed" in (cfg.output / report["error_log"]).read_text()
 
 
 def test_baseline_failure_during_the_agent_is_attributed_to_the_baseline(tmp_path, monkeypatch):

@@ -1,0 +1,49 @@
+diff --git a/cloudinit/distros/__init__.py b/cloudinit/distros/__init__.py
+index 9a073742c..c857a8737 100644
+--- a/cloudinit/distros/__init__.py
++++ b/cloudinit/distros/__init__.py
+@@ -151,11 +151,11 @@ class Distro(persistence.CloudInitPickleMixin, metaclass=abc.ABCMeta):
+     # Directory where the distro stores their DHCP leases.
+     # The children classes should override this with their dhcp leases
+     # directory
+-    dhclient_lease_directory: str | None = None
++    dhclient_lease_directory: Optional[str] = None
+     # A regex to match DHCP lease file(s)
+     # The children classes should override this with a regex matching
+     # their lease file name format
+-    dhclient_lease_file_regex: str | None = None
++    dhclient_lease_file_regex: Optional[str] = None
+ 
+     def __init__(self, name, cfg, paths):
+         self._paths = paths
+diff --git a/cloudinit/sources/DataSourceCloudStack.py b/cloudinit/sources/DataSourceCloudStack.py
+index e4b4d39b2..98078554e 100644
+--- a/cloudinit/sources/DataSourceCloudStack.py
++++ b/cloudinit/sources/DataSourceCloudStack.py
+@@ -299,16 +299,16 @@ def get_vr_address(distro=None):
+     else:
+         LOG.debug("Distro object is not defined, skipping leasefile search")
+ 
+-    if not lease_file:
+-        LOG.debug("No lease file found, using default gateway")
+-        return get_default_gateway()
+-
+-    lease_file = dhcp.IscDhclient.parse_dhcp_server_from_lease_file(lease_file)
+-    if not latest_address:
+-        # No virtual router found, fallback on default gateway
+-        LOG.debug("No DHCP found, using default gateway")
+-        return get_default_gateway()
+-    return latest_address
++    if lease_file:
++        latest_address = dhcp.IscDhclient.parse_dhcp_server_from_lease_file(
++            lease_file
++        )
++        if latest_address:
++            return latest_address
++
++    # No virtual router found, fallback to default gateway
++    LOG.debug("No DHCP found, using default gateway")
++    return get_default_gateway()
+ 
+ 
+ # Used to match classes to dependencies
