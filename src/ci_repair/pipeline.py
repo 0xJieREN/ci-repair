@@ -53,6 +53,8 @@ class Config:
     wall_seconds: int = 600
     command_seconds: int = 60
     task: str = ""
+    # The caller has shown this source fails the job's checks, so no baseline runs here.
+    failure_reproduced: bool = False
 
     def validate(self):
         budgets = (self.steps, self.cost, self.wall_seconds, self.command_seconds)
@@ -315,7 +317,7 @@ def run(config: Config, model, policy: Policy | None = None) -> dict:
         context = build_context(config, log, policy)
         (config.output / "context.json").write_text(context + "\n")
         # The agent's first calls only read logs and code, so they need not wait for the baseline.
-        baseline = Baseline(config, archive, image)
+        baseline = None if config.failure_reproduced else Baseline(config, archive, image)
         phase = "agent"
         with workspace(archive, image, config.command_seconds, config.wall_seconds) as env:
             # Diff against the recorded baseline so an agent commit cannot hide changes.
@@ -342,12 +344,13 @@ def run(config: Config, model, policy: Policy | None = None) -> dict:
             report["patch_sha256"] = hashlib.sha256(patch).hexdigest()
             paths = patch_files(env, base) if patch else []
         phase = "baseline"
-        record = baseline.result()
-        state["command_seconds"] += record["duration_seconds"]
-        if not reproduced(record):
-            report["status"] = "BASELINE_NOT_REPRODUCED"
-            report["stop_reason"] = StopReason.BASELINE_NOT_REPRODUCED.value
-            return report
+        if baseline is not None:
+            record = baseline.result()
+            state["command_seconds"] += record["duration_seconds"]
+            if not reproduced(record):
+                report["status"] = "BASELINE_NOT_REPRODUCED"
+                report["stop_reason"] = StopReason.BASELINE_NOT_REPRODUCED.value
+                return report
         if not patch:
             report["status"] = "NO_PATCH"
             return report

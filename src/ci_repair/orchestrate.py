@@ -338,8 +338,12 @@ def _repair_run(collection, output, repo, manifest, report, model_factory, polic
         ]
         task = job_task(entry["meta"], repaired_names, others)
         # Without earlier repairs the candidate is the original tree, so the pipeline's
-        # baseline, run alongside the agent, is this job's baseline.
-        repair = run_pipeline(replace(cfg, task=task), model_factory(), policy)
+        # baseline, run alongside the agent, is this job's baseline. With them, the job
+        # failed on the original source and the prior check showed the candidate still
+        # fails it, possibly only in a later step: the pipeline runs no baseline of its own.
+        repair = run_pipeline(
+            replace(cfg, task=task, failure_reproduced=prior), model_factory(), policy
+        )
         add_usage(usage, repair)
         result.update(repair_status=repair["status"], stop_reason=repair.get("stop_reason"))
         record = cfg.output / "baseline.json"
@@ -495,7 +499,11 @@ def fix_up(
     )
     repair = run_pipeline(
         replace(
-            cfg, output=job_dir / "fixup", failure_log=job_dir / "fixup-failure.log", task=task
+            cfg,
+            output=job_dir / "fixup",
+            failure_log=job_dir / "fixup-failure.log",
+            task=task,
+            failure_reproduced=True,  # final verification just failed on this tree
         ),
         model_factory(),
         policy,

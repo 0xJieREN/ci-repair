@@ -102,10 +102,12 @@ source, and if the cumulative patch already passes this job's checks, mark
 `FIXED_BY_PRIOR` (no agent) → otherwise repair on a candidate repository that
 contains earlier repairs → commit. Each job's task also lists the other failed jobs of the run with the first
 error block of their logs (bounded, marked untrusted), because jobs of one run
-often share a cause. Each repair replays the failing command on its candidate in a
-separate container while the agent starts, because the agent's first calls only read
-logs and code. For a job with no earlier repairs the candidate is the original tree,
-so that is its only baseline. The gate waits for the baseline before it verifies
+often share a cause. A job with no earlier repairs replays its failing command on its
+candidate, which is the original tree, in a separate container while the agent
+starts, because the agent's first calls only read logs and code; that is its only
+baseline. A job with earlier repairs runs no second baseline: it already failed on
+the original source, and the prior check showed the candidate still fails it,
+possibly only in a step after the failing one. The gate waits for the baseline before it verifies
 anything, so no probe competes with it for CPU; if the failure does not reproduce,
 the session ends at the next step and the job is `BASELINE_NOT_REPRODUCED`, with the
 agent's edits discarded. Finally every `REPAIRED`/`FIXED_BY_PRIOR` job is

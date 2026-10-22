@@ -37,13 +37,17 @@ CHECKS = {
 
 
 def check(script: str, tree: Path) -> dict:
-    """A record shaped like pipeline.run_test's; a failure repeats the job's CI log line."""
-    job, passes = next(v for marker, v in CHECKS.items() if marker in script)
-    ok = passes(tree)
+    """A record shaped like pipeline.run_test's; a failure repeats the job's CI log line.
+
+    A regression command chains several steps; it passes only if every step passes.
+    """
+    steps = [v for marker, v in CHECKS.items() if marker in script]
+    assert steps, script
+    failed = [job for job, passes in steps if not passes(tree)]
     return {
         "command": script,
-        "returncode": 0 if ok else 1,
-        "output": "ok" if ok else f"AssertionError in {job}",
+        "returncode": 1 if failed else 0,
+        "output": f"AssertionError in {failed[0]}" if failed else "ok",
         "exception_info": "",
     }
 
@@ -103,23 +107,28 @@ class World:
             if patch.read_bytes():
                 git(tree, "apply", "--binary", str(patch))
             failing = check(cfg.failing_command, tree)
-        regression = {**failing, "same_as": "failing"}
+            if cfg.regression_command == cfg.failing_command:
+                regression = {**failing, "same_as": "failing"}
+            else:
+                regression = check(cfg.regression_command, tree)
         write_json(cfg.output / "failing.json", failing)
         write_json(cfg.output / "regression.json", regression)
-        verified = failing["returncode"] == 0
+        verified = failing["returncode"] == regression["returncode"] == 0
         return {"status": "PASS" if verified else "FAIL", "verified": verified,
                 "tests": [failing, regression]}  # fmt: skip
 
     def pipeline(self, cfg, edit, policy):
-        """Baseline on the candidate, the scripted edit, then verification of its patch."""
+        """Baseline on the candidate (unless already shown), the scripted edit, then
+        verification of its patch."""
         self.agents.append(cfg)
         cfg.output.mkdir(parents=True)
         usage = {"model_calls": 3, "estimated_cost_usd": 0.01, "agent_steps": 3,
                  "wall_seconds": 5.0, "models_used": ["fake/model"]}  # fmt: skip
-        baseline = check(cfg.failing_command, cfg.repo)
-        write_json(cfg.output / "baseline.json", baseline)
-        if baseline["returncode"] == 0:
-            return {"status": "BASELINE_NOT_REPRODUCED", "verified": False, "usage": usage}
+        if not cfg.failure_reproduced:
+            baseline = check(cfg.failing_command, cfg.repo)
+            write_json(cfg.output / "baseline.json", baseline)
+            if baseline["returncode"] == 0:
+                return {"status": "BASELINE_NOT_REPRODUCED", "verified": False, "usage": usage}
         edit(cfg.repo)
         tests = [check(cfg.failing_command, cfg.repo), check(cfg.regression_command, cfg.repo)]
         patch = git(cfg.repo, "diff", "--binary")
@@ -320,3 +329,28 @@ def test_errors_are_reported_without_their_message(tmp_path, world):
     report = run(tmp_path, fake, (("lint", "check"),))
     assert report["status"] == "ERROR" and report["error_type"] == "RuntimeError"
     assert "secret-value" not in (tmp_path / "out/report.json").read_text()
+
+
+BOTH_JOB = """  both:
+    runs-on: ubuntu-latest
+    container: ci-repair-demo:local
+    steps:
+      - uses: actions/checkout@v4
+      - name: first
+        run: python -c 'from src.app import value; assert value > 0'
+      - name: second
+        run: python -c 'from src.other import flag; assert flag'
+"""
+
+
+def test_a_job_failing_only_in_a_later_step_after_earlier_repairs_is_repaired(tmp_path, world):
+    # lint's repair makes both's failed step pass, but both's next step still fails. The
+    # job failed on the original source, so its agent must run, not end unreproduced.
+    fake = world(set_value(1), set_flag)
+    root = collection(tmp_path, WORKFLOW + BOTH_JOB, jobs=(("lint", "check"), ("both", "first")))
+    report = repair_run(
+        root, tmp_path / "out", model_factory=fake.model, policy=Policy(POLICY), build=fake.build
+    )
+    assert statuses(report) == {"lint": "REPAIRED", "both": "REPAIRED"}, report
+    assert report["status"] == "PASS"
+    assert [a.failure_reproduced for a in fake.agents] == [False, True]

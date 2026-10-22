@@ -36,6 +36,33 @@ measurements live in [eval/README.md](eval/README.md).
 
 ## [Unreleased]
 
+### Stage F2: a job failing only in a later step after earlier repairs gets its agent (2026-10-22)
+
+**Motivation.** A job with earlier repairs was checked on the original source, then
+repaired on the candidate, where the pipeline ran the failing command again as its
+baseline. If the earlier repairs made the failing step pass while a later step of
+the same job still failed, that second baseline passed and the session ended
+`BASELINE_NOT_REPRODUCED`: the job was mislabeled and no repair was attempted. A
+fix-up had the same gap.
+
+**Fixed**
+- `Config.failure_reproduced` tells the pipeline that the caller has shown the
+  source fails the job's checks; the pipeline then runs no baseline. The
+  orchestrator sets it for jobs with earlier repairs (original baseline plus the
+  failed prior check) and for fix-ups (failed final verification).
+- These jobs no longer spend one container run on a redundant baseline.
+
+**Verification.** New tests: in `tests/test_orchestrate_flow.py` a job whose failed
+step an earlier repair fixed, but whose next step still fails, is repaired and the
+run ends `PASS`; it ended `BASELINE_NOT_REPRODUCED` and `PARTIAL` before the fix. A
+pipeline with `failure_reproduced` starts no baseline container. The fake
+verification now checks a distinct regression command, as `verify_patch` does.
+`scripts/check.sh --unit`: 262 passed.
+
+**Known limits.** No recorded trial is known to have hit this; it was found by
+reading the code. These sessions no longer stop early on an unreproduced baseline;
+for them that stop could only fire on a step that an earlier repair already fixed.
+
 ### Stage F1: a job a later repair fixed is no longer reported unrepaired (2026-10-22)
 
 **Motivation.** E2 found one trial (task 26, round 4) that passed the grader but
