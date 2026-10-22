@@ -138,6 +138,7 @@ class Sandbox(DockerEnvironment):
 
 @contextmanager
 def workspace(archive: Path, image: str, timeout: int, lifetime: int) -> Iterator[Sandbox]:
+    """A disposable container with the source unpacked: no network or capabilities, capped."""
     env = Sandbox(
         image=image,
         cwd="/workspace",

@@ -234,6 +234,11 @@ def default_repair(item: dict, directory: Path, policy: Policy) -> dict:
 def process_one(
     store: Store, policy: Policy, state_dir: Path, repair=default_repair
 ) -> dict | None:
+    """Claim one queued delivery, recheck it against GitHub and the policy, and repair it.
+
+    Returns the stored result, or None when the queue is empty. A failure is recorded as
+    the item's result with a private traceback, never raised to the worker loop.
+    """
     item = store.claim()
     if item is None:
         return None

@@ -130,6 +130,7 @@ SIBLING_BUDGET = 2000
 
 
 def job_task(meta: dict, prior: list[str], others: list[dict] | None = None) -> str:
+    """The task text for one job's session: its failure, earlier jobs' changes, sibling excerpts."""
     task = (
         f"GitHub Actions job {meta['job_name']!r} failed in run {meta['run_id']} "
         f"(step: {', '.join(meta.get('failed_steps') or ['unknown'])})."
@@ -165,6 +166,14 @@ def repair_run(
     policy: Policy,
     build: Callable[..., dict] = build_environment,
 ) -> dict:
+    """Repair every failed job of a collected run into one cumulative patch.
+
+    Jobs are repaired in order on one candidate tree, each committed before the next
+    starts. A job the earlier patches already fix is not repaired. At the end every job
+    is verified again against the final patch in fresh containers, and a job broken by a
+    later repair gets one fix-up session. Writes `report.json` and `patch.diff` under
+    `output` and returns the report.
+    """
     manifest = json.loads((collection / "run.json").read_text())
     if manifest.get("schema_version") != 1:
         raise ValueError("Unsupported run manifest")
@@ -494,6 +503,11 @@ def fix_up(
     usage: dict,
     total: dict,
 ) -> None:
+    """Repair a job that later repairs broke, within the budget the run has left.
+
+    The session sees the current failure from final verification. A verified fix-up is
+    committed on the candidate and `cumulative` is rewritten; `result["fixup"]` records it.
+    """
     cfg = result["config"]
     left = {key: total[key] - usage[spent] for key, spent in SPENT.items()}
     if left["steps"] < 1 or left["cost"] <= 0 or left["wall_seconds"] < 1:

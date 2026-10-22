@@ -224,6 +224,7 @@ def within(path: str, prefixes: Iterable[str]) -> bool:
 
 
 def patch_stats(patch: bytes) -> dict:
+    """Changed lines (inside hunks only) and whether the patch has binary content."""
     lines = patch.splitlines()
     changed, in_hunk = 0, False
     for line in lines:
@@ -285,6 +286,13 @@ def _verdict(value, where: str) -> Verdict:
 
 
 class Policy:
+    """The operator's rules, validated strictly: unknown keys are errors, not ignored.
+
+    `budget` caps what a run may spend, `check_patch` classifies a patch's files and size
+    as ALLOW / REVIEW / DENY, and the repository, branch and publication rules gate the
+    trigger and the draft PR. The model never sees or changes it.
+    """
+
     def __init__(self, data: dict | None = None, *, source: str = "builtin", raw: bytes = b""):
         self.data: dict = _strict_merge(DEFAULTS, data or {}, "policy")
         self.source = source

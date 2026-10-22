@@ -14,6 +14,7 @@ LOCATION = re.compile(
 
 
 def failure_evidence(log: str) -> dict:
+    """Up to eight error-line windows of the log, merged and capped at 7,000 characters."""
     # Line numbers always refer to the original log, including timestamp prefixes.
     lines = [ANSI.sub("", line) for line in log.splitlines()]
     matches = [i for i, line in enumerate(lines) if ERROR.search(line)]

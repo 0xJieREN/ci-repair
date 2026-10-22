@@ -99,6 +99,16 @@ NUDGE = (
 
 
 class RepairAgent(DefaultAgent):
+    """mini's loop, with submission turned into a request the system may refuse.
+
+    `gate("submit")` runs when the model submits; a rejection returns the gate's feedback
+    as the command output, and the session ends after `max_rejected_submissions`. With
+    `early_stop`, `gate("probe")` runs after each step (cached by patch digest, capped by
+    `max_probes`) and ends the session as soon as the checks pass. `unchanged` reports
+    whether the tree is still untouched, so one reminder can be sent after `nudge_after`
+    calls.
+    """
+
     def __init__(
         self,
         *args,

@@ -22,6 +22,11 @@ def digest(data: bytes) -> str:
 
 
 def verified_run(run_dir: Path) -> tuple[dict, bytes]:
+    """The report and patch of a run that may be published, or PublicationError.
+
+    Only a run-level `PASS` whose checks all passed in fresh containers, with no other
+    unsuccessful job and an unchanged patch digest, qualifies.
+    """
     report = json.loads((run_dir / "report.json").read_text())
     patch = (run_dir / "patch.diff").read_bytes()
     tests = report.get("tests", [])
@@ -175,6 +180,10 @@ def require_base(url: str, base: str, expected: str) -> None:
 
 
 def prepare(run_dir: Path, output: Path, base: str, policy: Policy | None = None) -> dict:
+    """Apply a verified patch to a fresh clone of the base commit and commit it locally.
+
+    Nothing is pushed: `publish` does that, from the record this writes.
+    """
     if output.exists():
         raise PublicationError(
             "Preparation directory already exists; resume publish or use a new directory"

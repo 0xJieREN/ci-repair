@@ -45,6 +45,8 @@ class BaselineError(Exception):
 
 @dataclass(frozen=True)
 class Config:
+    """One job's repair: the source, its failure, the checks to run and the requested budget."""
+
     repo: Path
     failure_log: Path
     output: Path
@@ -268,6 +270,13 @@ def make_gate(
 
 
 def run(config: Config, model: Model, policy: Policy | None = None) -> dict:
+    """Baseline, bounded agent session, and verification in fresh containers for one job.
+
+    The policy caps the requested budget. The baseline must reproduce the failure unless
+    `config.failure_reproduced`; the agent works in a disposable container; only the fresh
+    verification of the extracted patch can make the result `PASS`. Writes `report.json`,
+    `patch.diff` and the trajectory under `config.output` and returns the report.
+    """
     policy = policy or Policy.permissive()
     config.validate()
     requested = {

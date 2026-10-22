@@ -32,9 +32,32 @@ measurements live in [eval/README.md](eval/README.md).
 | 0.4.0 | 09-18…09-22 | `09afeb6`…`74c0d04` | Hardening, evaluation harnesses, then the automatic lifecycle: policy, stop gate, reconstruction, multi-job, webhook | Paired synthetic, historical and LCA pilots |
 | 0.5.0 | 09-23…09-28 | `a0a3377`…`v0.5.0` | Scope focus, live acceptance, replay fidelity on a real dataset, paired comparison with Pi, orchestration and verification efficiency | Live webhook→draft PR; 39/68 LCA tasks usable; 234 + 21 paired trials; −53% wall time from lean verification (round 3, 117 trials) |
 | 0.6.0 | 09-28 | `4504d62`…`v0.6.0` | Remove the manual single-job path; evaluation never scores provider failures; past results in one place | Full gate 240 passed; round 3 completed by a rerun with no provider errors |
-| Unreleased | 09-28…10-22 | `82090ad`… | Baseline alongside the agent; a checkable evaluation contract; failure analysis; a prompt intervention against it; the run loop tested without Docker; private tracebacks and typed signatures; the evaluation record recomputed from archived evidence | 10.8 s of baseline per trial overlapped (round 4, 39 trials × 1); all 111 passing patches of round 3 stay within the upstream fix's files; 16 of 19 failures are one behaviour; the intervention is inconclusive (8/12 against 6/12 on 4 tasks, run `36970961464`); every result table of `eval/README.md` recomputed from 76 MB of archived evidence (`eval/reproduce.py --check`); unit gate 236 → 290 tests, coverage 81% → 89% |
+| Unreleased | 09-28…10-22 | `82090ad`… | Baseline alongside the agent; a checkable evaluation contract; failure analysis; a prompt intervention against it; the run loop tested without Docker; private tracebacks and typed signatures; the evaluation record recomputed from archived evidence; README and developer guide | 10.8 s of baseline per trial overlapped (round 4, 39 trials × 1); all 111 passing patches of round 3 stay within the upstream fix's files; 16 of 19 failures are one behaviour; the intervention is inconclusive (8/12 against 6/12 on 4 tasks, run `36970961464`); every result table of `eval/README.md` recomputed from 76 MB of archived evidence (`eval/reproduce.py --check`); unit gate 236 → 290 tests, coverage 81% → 89% |
 
 ## [Unreleased]
+
+### Stage D1: README, developer guide and entry-point docstrings (2026-10-22)
+
+**Motivation.** The README described what the system does and its results, but not
+why it exists, how one job's repair is isolated, what was traded away, or what it
+cannot do yet. There was no developer guide, and the core entry points
+(`repair_run`, `pipeline.run`, `RepairAgent`, `Policy`) had no docstrings.
+
+**Added**
+- README: a one-line summary, the motivation, a second diagram of one job's
+  isolation (host, agent container, baseline container, fresh verifiers), a module
+  table, a quickstart that needs no key or Docker, design trade-offs, limitations
+  and a roadmap. Each claim cites the evaluation record or the lifecycle document.
+- `CONTRIBUTING.md`: setup, the gate and the Colima rule, a code map, test
+  conventions (fakes, the scripted model, the Docker marker), style, commits and
+  the changelog, and the evaluation workflow from hosted run to archived evidence.
+- Docstrings for the main entry points of `agent`, `context`, `orchestrate`,
+  `pipeline`, `policy`, `publish`, `webhook` and `workspace`.
+
+**Verification.** `scripts/check.sh --unit`: 290 passed, 14 skipped. Every number in
+the new README sections is in `eval/README.md` or `eval/results/reproduced.md`.
+
+**Known limits.** The roadmap lists intentions, not measured work.
 
 ### Stage E3: the evaluation record recomputed from archived evidence (2026-10-22)
 
