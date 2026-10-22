@@ -3,6 +3,21 @@
 Tools for measuring CI Repair on external CI-failure datasets. They are not part of
 the installed package and are never run by the webhook or CLIs.
 
+## Reproducing the tables
+
+Every result table below, except LCA static coverage (which reads the dataset), is
+recomputed from evidence archived in [`results/`](results/README.md): the hosted
+runs' per-trial results, patches, CI Repair's reports and agent trajectories. No
+model, container or network is used, and it takes about a second:
+
+```sh
+uv run python eval/reproduce.py           # print every table
+uv run python eval/reproduce.py --check   # exit 1 if a table row here disagrees
+```
+
+The unit gate runs the check (`tests/test_eval_results.py`), and
+`results/reproduced.md` keeps the output for review.
+
 ## LCA static coverage
 
 `lca_coverage.py` fetches every failing repository of the pinned
@@ -63,7 +78,7 @@ Hosted run [36124065326](https://github.com/0xJieREN/ci-repair/actions/runs/3612
 | 1 | 4 | 2 | 0 | 0 | 1 | 0 | 7 |
 | 2 | 9 | 5 | 1 | 2 | 2 | 0 | 19 |
 | 3 | 1 | 3 | 0 | 0 | 2 | 0 | 6 |
-| All | **39** | 14 | 2 | 4 | 7 | 2 | 68 |
+| All | 39 | 14 | 2 | 4 | 7 | 2 | 68 |
 
 The first full run had 30 usable tasks. Replay fidelity fixes found by these runs
 (checkout history, hosted-runner apt behavior, warm-up cleanup, build pids,
@@ -133,7 +148,9 @@ commit `8cd5bce`, mini-swe-agent 2.4.6, Pi 0.87.1; 234 trials, no infrastructure
 
 - Only three tasks differ, all in Pi's favor: 45 (CI Repair 2/3), 53 (1/3), 57 (0/3).
   The mean per-task difference is −5.1 points. The 95% bootstrap interval, clustered
-  by repository, is [−13.1, 0.0], so the difference is borderline.
+  by repository, is [−12.9, 0.0], so the difference is borderline. (`reproduce.py`:
+  10,000 resamples of the 13 repositories, seed 0. The record first gave [−13.1, 0.0]
+  from a computation that was not kept; the difference is resampling noise.)
 - CI Repair's own verdict matched the external grader in all 117 trials (107 PASS,
   10 FAIL), so it never claimed an unverified fix.
 - CI Repair made fewer calls and cost less. Its time includes its own baseline,
@@ -311,7 +328,8 @@ uv run python eval/trajectories.py runs/compare-a runs/compare-b
 One further trial (task 26, round 4) passed the grader while CI Repair reported
 `PARTIAL`: the first job's session ended at the step limit, the second job's repair
 also fixed the first, and a job whose repair failed is not checked against the final
-patch.
+patch. (Fixed after the rounds in `464a741`: such a job is now rechecked and reported
+`FIXED_BY_LATER`. No paid run has measured it yet.)
 
 The 16 open failures are one behaviour. In the sessions read in full (45, 53, 158,
 160), the agent reads the failing location within its first three commands and then
@@ -326,6 +344,7 @@ All job sessions of the five recorded runs, provider errors excluded:
 
 | Session outcome | Sessions | Mean calls | Searched history | Commands per session | Searched for copies | Commands per session |
 |---|---:|---:|---:|---:|---:|---:|
+| `FAIL` | 1 | 30.0 | 1 | 5.0 | 1 | 2.0 |
 | `NO_PATCH` | 26 | 30.0 | 25 | 4.5 | 23 | 5.7 |
 | `PASS`, 15 or more calls | 38 | 20.7 | 27 | 1.7 | 31 | 2.3 |
 | `PASS`, under 15 calls | 268 | 5.3 | 20 | 0.1 | 52 | 0.2 |
@@ -397,7 +416,7 @@ sessions to call the hypothesis supported, and 6 or fewer passes to call it refu
 - Task 53, repetition 3 passed the grader with a 27-call repair of one job while
   the other job's session ended `NO_PATCH`, so the run reported `PARTIAL`. This is
   the gap seen on task 26 in round 4: a job whose repair failed is not rechecked
-  against the final patch.
+  against the final patch (fixed since in `464a741`).
 
 Not shown: any effect on the other 35 tasks, which were not rerun, and which of the
 three changes matters.

@@ -16,26 +16,33 @@ ERROR_LOG = "error.log"
 MASK = "[REDACTED]"
 # Environment variables whose values are credentials, by name.
 SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH", re.IGNORECASE)
+# Provider and GitHub token formats.
+TOKEN_SHAPE = r"\b(?:sk-[\w-]{16,}|gh[pousr]_\w{20,}|github_pat_\w{20,})"
 # Credentials that need not come from this process's environment: a labelled value
 # ("api_key=...", "Authorization: Bearer ...") keeps its label; a known token shape does not.
 SECRET_TEXT = re.compile(
     r"(?P<label>(?i:\b(?:api[_-]?key|token|secret|password|authorization)[\"']?\s*[:=]\s*[\"']?"
-    r"(?:bearer\s+)?|\bbearer\s+))[^\s\"',}]{4,}"
-    r"|\b(?:sk-[\w-]{16,}|gh[pousr]_\w{20,}|github_pat_\w{20,})"
+    r"(?:bearer\s+)?|\bbearer\s+))[^\s\"',}]{4,}|" + TOKEN_SHAPE
 )
 
 logger = logging.getLogger(__name__)
 
 
-def redact(text: str, environ: Mapping[str, str] | None = None) -> str:
+def secret_values(environ: Mapping[str, str] | None = None) -> list[str]:
+    """Values of credential-named environment variables, longest first."""
     environ = os.environ if environ is None else environ
+    values = (v for k, v in environ.items() if SECRET_NAME.search(k) and len(v) >= 8)
+    return sorted(values, key=len, reverse=True)
+
+
+def has_credential(text: str, environ: Mapping[str, str] | None = None) -> bool:
+    """A known credential, as opposed to code that merely assigns a variable named token."""
+    return any(v in text for v in secret_values(environ)) or bool(re.search(TOKEN_SHAPE, text))
+
+
+def redact(text: str, environ: Mapping[str, str] | None = None) -> str:
     # Longest first, so a value that contains another is masked whole.
-    values = sorted(
-        (v for k, v in environ.items() if SECRET_NAME.search(k) and len(v) >= 8),
-        key=len,
-        reverse=True,
-    )
-    for value in values:
+    for value in secret_values(environ):
         text = text.replace(value, MASK)
     return SECRET_TEXT.sub(lambda m: (m["label"] or "") + MASK, text)
 

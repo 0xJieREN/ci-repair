@@ -23,8 +23,6 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import pyarrow.parquet as pq
-
 from ci_repair.policy import Policy
 from ci_repair.reconstruct import (
     Problems,
@@ -52,6 +50,8 @@ def dataset(path: Path | None, cache: Path) -> list[dict]:
             urllib.request.urlretrieve(PARQUET_URL, path)
     if hashlib.sha256(path.read_bytes()).hexdigest() != PARQUET_SHA256:
         raise SystemExit(f"{path} is not the pinned LCA revision {REVISION}")
+    import pyarrow.parquet as pq  # only for reading the dataset, not for summaries
+
     return pq.read_table(path).to_pylist()
 
 

@@ -32,9 +32,60 @@ measurements live in [eval/README.md](eval/README.md).
 | 0.4.0 | 09-18…09-22 | `09afeb6`…`74c0d04` | Hardening, evaluation harnesses, then the automatic lifecycle: policy, stop gate, reconstruction, multi-job, webhook | Paired synthetic, historical and LCA pilots |
 | 0.5.0 | 09-23…09-28 | `a0a3377`…`v0.5.0` | Scope focus, live acceptance, replay fidelity on a real dataset, paired comparison with Pi, orchestration and verification efficiency | Live webhook→draft PR; 39/68 LCA tasks usable; 234 + 21 paired trials; −53% wall time from lean verification (round 3, 117 trials) |
 | 0.6.0 | 09-28 | `4504d62`…`v0.6.0` | Remove the manual single-job path; evaluation never scores provider failures; past results in one place | Full gate 240 passed; round 3 completed by a rerun with no provider errors |
-| Unreleased | 09-28…10-22 | `82090ad`… | Baseline alongside the agent; a checkable evaluation contract; failure analysis; a prompt intervention against it; the run loop tested without Docker; private tracebacks and typed signatures | 10.8 s of baseline per trial overlapped (round 4, 39 trials × 1); all 111 passing patches of round 3 stay within the upstream fix's files; 16 of 19 failures are one behaviour; the intervention is inconclusive (8/12 against 6/12 on 4 tasks, run `36970961464`); unit gate 236 → 279 tests, coverage 81% → 89% |
+| Unreleased | 09-28…10-22 | `82090ad`… | Baseline alongside the agent; a checkable evaluation contract; failure analysis; a prompt intervention against it; the run loop tested without Docker; private tracebacks and typed signatures; the evaluation record recomputed from archived evidence | 10.8 s of baseline per trial overlapped (round 4, 39 trials × 1); all 111 passing patches of round 3 stay within the upstream fix's files; 16 of 19 failures are one behaviour; the intervention is inconclusive (8/12 against 6/12 on 4 tasks, run `36970961464`); every result table of `eval/README.md` recomputed from 76 MB of archived evidence (`eval/reproduce.py --check`); unit gate 236 → 290 tests, coverage 81% → 89% |
 
 ## [Unreleased]
+
+### Stage E3: the evaluation record recomputed from archived evidence (2026-10-22)
+
+**Motivation.** Every number in `eval/README.md` came from hosted runs whose
+artifacts GitHub deletes after 90 days. The scripts that computed them read the
+downloaded runs under `runs/`, which is not committed, so no reader could check a
+table, and nothing stopped a table from drifting from its data. One row of the
+session table (the single `FAIL` session) was missing, and the bootstrap interval
+of round 1 came from a computation that was not kept.
+
+**Added**
+- `eval/results/`: the evidence of the seven runs behind the record (3,064 files,
+  76 MB; about 12 MB once Git compresses it): per-trial results and patches, CI
+  Repair's reports and baselines, the agent trajectories, and the replay's upstream
+  reference diffs. `eval/results/README.md` maps each directory to its run, commit
+  and round.
+- `eval/archive.py` copies that evidence out of a `gh run download` directory. It
+  refuses a run whose files hold a host credential value or a provider/GitHub token
+  format (`ci_repair.diagnostics.has_credential`).
+- `eval/reproduce.py` recomputes every result table of the record (all but LCA
+  static coverage, which reads the dataset) with no model, container or network,
+  in about a second. `--check` exits 1 if a table row in `eval/README.md` is not
+  reproduced verbatim; `eval/results/reproduced.md` keeps the output.
+- `tests/test_eval_results.py` runs the check, keeps `reproduced.md` current, and
+  covers the grader's scoring rule (`compare.grade`): every job must pass in a fresh
+  container, no patch is a failure, `REVIEW` passes but is not auto-publishable,
+  `DENY` fails even when the checks pass.
+
+**Changed**
+- `eval/README.md`: the session table gains its `FAIL` row; two table rows lose
+  bold so they match the recomputation; the round 1 bootstrap interval is
+  [−12.9, 0.0] (10,000 resamples of the 13 repositories, seed 0) instead of the
+  unreproducible [−13.1, 0.0]. The conclusion (borderline) is unchanged. The two
+  notes on jobs not rechecked against the final patch now point to `464a741`.
+- `audit.py` returns its counts (`count`) separately from the text; `trajectories.py`
+  labels rows as the record does; `lca_coverage.py` imports pyarrow only to read
+  the dataset, so the summaries run without it.
+
+**Verification.** `uv run python eval/reproduce.py --check` exits 0: every table
+row of `eval/README.md` other than static coverage is recomputed from
+`eval/results/`. Before the change, the scripts alone reproduced rounds 1 and 3,
+the audit's round 3 column and the session table's numbers. The archive was
+scanned with `has_credential`: no host value and no token format; the 67 files the
+broader mask matched hold the repaired projects' code and test placeholders.
+`scripts/check.sh --unit`: 290 passed, 14 skipped; `--colima`: 304 passed.
+
+**Known limits.** The archive replaces the expired artifacts only for these seven
+runs; earlier pilots in `docs/` cite runs whose evidence is gone. The check
+compares table rows, not the numbers quoted in prose; `reproduced.md` lists those
+figures for review. No paid run was made, so `FIXED_BY_LATER` (`464a741`) is
+untested against real tasks.
 
 ### Stage R1: private tracebacks, progress logs and typed signatures (2026-10-22)
 

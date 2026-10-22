@@ -1,0 +1,86 @@
+diff --git a/src/diffusers/loaders/__init__.py b/src/diffusers/loaders/__init__.py
+index 675246e..03263f5 100644
+--- a/src/diffusers/loaders/__init__.py
++++ b/src/diffusers/loaders/__init__.py
+@@ -56,9 +56,9 @@ _import_structure = {}
+ if is_torch_available():
+     _import_structure["unet"] = ["UNet2DConditionLoadersMixin"]
+     _import_structure["utils"] = ["AttnProcsLayers"]
++    _import_structure["single_file"] = ["FromSingleFileMixin"]
+ 
+     if is_transformers_available():
+-        _import_structure["single_file"] = ["FromSingleFileMixin"]
+         _import_structure["lora"] = ["LoraLoaderMixin", "StableDiffusionXLLoraLoaderMixin"]
+         _import_structure["textual_inversion"] = ["TextualInversionLoaderMixin"]
+         _import_structure["ip_adapter"] = ["IPAdapterMixin"]
+@@ -68,13 +68,13 @@ _import_structure["peft"] = ["PeftAdapterMixin"]
+ 
+ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
+     if is_torch_available():
++        from .single_file import FromSingleFileMixin
+         from .unet import UNet2DConditionLoadersMixin
+         from .utils import AttnProcsLayers
+ 
+         if is_transformers_available():
+             from .ip_adapter import IPAdapterMixin
+             from .lora import LoraLoaderMixin, StableDiffusionXLLoraLoaderMixin
+-            from .single_file import FromSingleFileMixin
+             from .textual_inversion import TextualInversionLoaderMixin
+ 
+     from .peft import PeftAdapterMixin
+diff --git a/src/diffusers/loaders/single_file.py b/src/diffusers/loaders/single_file.py
+index d23b2b9..25b11b4 100644
+--- a/src/diffusers/loaders/single_file.py
++++ b/src/diffusers/loaders/single_file.py
+@@ -15,7 +15,6 @@ import os
+ import re
+ 
+ from huggingface_hub.utils import validate_hf_hub_args
+-from transformers import AutoFeatureExtractor
+ 
+ from ..models.modeling_utils import load_state_dict
+ from ..utils import (
+@@ -119,6 +118,8 @@ def build_sub_model_components(
+         if load_safety_checker:
+             from ..pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
+ 
++            from transformers import AutoFeatureExtractor
++
+             safety_checker = StableDiffusionSafetyChecker.from_pretrained(
+                 "CompVis/stable-diffusion-safety-checker", local_files_only=local_files_only
+             )
+diff --git a/src/diffusers/loaders/single_file_utils.py b/src/diffusers/loaders/single_file_utils.py
+index 475b7d3..604da32 100644
+--- a/src/diffusers/loaders/single_file_utils.py
++++ b/src/diffusers/loaders/single_file_utils.py
+@@ -21,12 +21,6 @@ from urllib.parse import urlparse
+ 
+ import requests
+ import yaml
+-from transformers import (
+-    CLIPTextConfig,
+-    CLIPTextModel,
+-    CLIPTextModelWithProjection,
+-    CLIPTokenizer,
+-)
+ 
+ from ..models import UNet2DConditionModel
+ from ..schedulers import (
+@@ -39,13 +33,16 @@ from ..schedulers import (
+     LMSDiscreteScheduler,
+     PNDMScheduler,
+ )
+-from ..utils import is_accelerate_available, logging
++from ..utils import is_accelerate_available, is_transformers_available, logging
+ 
+ 
+ if is_accelerate_available():
+     from accelerate import init_empty_weights
+     from accelerate.utils import set_module_tensor_to_device
+ 
++if is_transformers_available():
++    from transformers import CLIPTextConfig, CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizer
++
+ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
+ 
+ CONFIG_URLS = {

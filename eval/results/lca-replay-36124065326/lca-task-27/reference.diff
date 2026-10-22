@@ -1,0 +1,383 @@
+diff --git a/cloudinit/distros/__init__.py b/cloudinit/distros/__init__.py
+index 5c891f26e..c02166ad2 100644
+--- a/cloudinit/distros/__init__.py
++++ b/cloudinit/distros/__init__.py
+@@ -170,6 +170,7 @@ class Distro(persistence.CloudInitPickleMixin, metaclass=abc.ABCMeta):
+         self._runner = helpers.Runners(paths)
+         self.package_managers: List[PackageManager] = []
+         self._dhcp_client = None
++        self._fallback_interface = None
+ 
+     def _unpickle(self, ci_pkl_version: int) -> None:
+         """Perform deserialization fixes for Distro."""
+@@ -1274,6 +1275,13 @@ class Distro(persistence.CloudInitPickleMixin, metaclass=abc.ABCMeta):
+             "/bin/true",
+         ] + (["-cf", config_file, interface] if config_file else [interface])
+ 
++    @property
++    def fallback_interface(self):
++        """Determine the network interface used during local network config."""
++        if self._fallback_interface is None:
++            self._fallback_interface = net.find_fallback_nic()
++        return self._fallback_interface
++
+ 
+ def _apply_hostname_transformations_to_url(url: str, transformations: list):
+     """
+diff --git a/cloudinit/net/dhcp.py b/cloudinit/net/dhcp.py
+index 9c94b3f92..7b2d41df1 100644
+--- a/cloudinit/net/dhcp.py
++++ b/cloudinit/net/dhcp.py
+@@ -19,8 +19,6 @@ import configobj
+ 
+ from cloudinit import subp, temp_utils, util
+ from cloudinit.net import (
+-    find_fallback_nic,
+-    get_devicelist,
+     get_ib_interface_hwaddr,
+     get_interface_mac,
+     is_ib_interface,
+@@ -98,17 +96,8 @@ def maybe_perform_dhcp_discovery(distro, nic=None, dhcp_log_func=None):
+         from the dhclient discovery if run, otherwise an empty list is
+         returned.
+     """
+-    if nic is None:
+-        nic = find_fallback_nic()
+-        if nic is None:
+-            LOG.debug("Skip dhcp_discovery: Unable to find fallback nic.")
+-            raise NoDHCPLeaseInterfaceError()
+-    elif nic not in get_devicelist():
+-        LOG.debug(
+-            "Skip dhcp_discovery: nic %s not found in get_devicelist.", nic
+-        )
+-        raise NoDHCPLeaseInterfaceError()
+-    return distro.dhcp_client.dhcp_discovery(nic, dhcp_log_func, distro)
++    interface = nic or distro.fallback_interface
++    return distro.dhcp_client.dhcp_discovery(interface, dhcp_log_func, distro)
+ 
+ 
+ def networkd_parse_lease(content):
+@@ -185,7 +174,7 @@ class DhcpClient(abc.ABC):
+     def parse_static_routes(routes: str) -> List[Tuple[str, str]]:
+         return []
+ 
+-    def get_newest_lease(self, distro) -> Dict[str, Any]:
++    def get_newest_lease(self, interface: str) -> Dict[str, Any]:
+         return {}
+ 
+ 
+@@ -218,15 +207,15 @@ class IscDhclient(DhcpClient):
+             dhcp_leases.append(dict(lease_options))
+         return dhcp_leases
+ 
+-    def get_newest_lease(self, distro) -> Dict[str, Any]:
++    def get_newest_lease(self, interface: str) -> Dict[str, Any]:
+         """Get the most recent lease from the ephemeral phase as a dict.
+ 
+         Return a dict of dhcp options. The dict contains key value
+         pairs from the most recent lease.
+ 
+-        @param distro: a distro object - not used in this class, but required
+-                       for function signature compatibility with other classes
+-                       that require a distro object
++        @param interface: an interface string - not used in this class, but
++            required for function signature compatibility with other classes
++            that require a distro object
+         @raises: InvalidDHCPLeaseFileError on empty or unparseable leasefile
+             content.
+         """
+@@ -355,7 +344,7 @@ class IscDhclient(DhcpClient):
+             )
+         if dhcp_log_func is not None:
+             dhcp_log_func(out, err)
+-        lease = self.get_newest_lease(distro)
++        lease = self.get_newest_lease(interface)
+         if lease:
+             return lease
+         raise InvalidDHCPLeaseFileError()
+@@ -535,9 +524,6 @@ class IscDhclient(DhcpClient):
+ class Dhcpcd(DhcpClient):
+     client_name = "dhcpcd"
+ 
+-    def __init__(self):
+-        super().__init__()
+-
+     def dhcp_discovery(
+         self,
+         interface: str,
+@@ -547,12 +533,12 @@ class Dhcpcd(DhcpClient):
+         """Run dhcpcd on the interface without scripts/filesystem artifacts.
+ 
+         @param interface: Name of the network interface on which to send a
+-                          dhcp request
++            dhcp request
+         @param dhcp_log_func: A callable accepting the client output and
+-                              error streams.
++            error streams.
+         @param distro: a distro object for network interface manipulation
+         @return: dict of lease options representing the most recent dhcp lease
+-                 parsed from the dhclient.lease file
++            parsed from the dhclient.lease file
+         """
+         LOG.debug("Performing a dhcp discovery on %s", interface)
+ 
+@@ -580,7 +566,7 @@ class Dhcpcd(DhcpClient):
+             )
+             if dhcp_log_func is not None:
+                 dhcp_log_func(out, err)
+-            lease = self.get_newest_lease(distro)
++            lease = self.get_newest_lease(interface)
+             if lease:
+                 return lease
+             raise NoDHCPLeaseError("No lease found")
+@@ -644,12 +630,10 @@ class Dhcpcd(DhcpClient):
+         # for compatibility we still expect a list of leases
+         return lease
+ 
+-    def get_newest_lease(self, distro) -> Dict[str, Any]:
+-        """Return a lease
+-
+-        Return a list of dicts of dhcp options. Each dict contains key value
+-        pairs a specific lease in order from oldest to newest.
++    def get_newest_lease(self, interface: str) -> Dict[str, Any]:
++        """Return a dict of dhcp options.
+ 
++        @param interface: which interface to dump the lease from
+         @raises: InvalidDHCPLeaseFileError on empty or unparseable leasefile
+             content.
+         """
+@@ -659,11 +643,11 @@ class Dhcpcd(DhcpClient):
+                     [
+                         "dhcpcd",
+                         "--dumplease",
+-                        distro.fallback_interface,
++                        interface,
+                     ],
+                     rcs=[0, 1],
+                 ).stdout,
+-                distro.fallback_interface,
++                interface,
+             )
+ 
+         except subp.ProcessExecutionError as error:
+@@ -781,17 +765,17 @@ class Udhcpc(DhcpClient):
+         if dhcp_log_func is not None:
+             dhcp_log_func(out, err)
+ 
+-        return self.get_newest_lease(distro)
++        return self.get_newest_lease(interface)
+ 
+-    def get_newest_lease(self, distro) -> Dict[str, Any]:
++    def get_newest_lease(self, interface: str) -> Dict[str, Any]:
+         """Get the most recent lease from the ephemeral phase as a dict.
+ 
+         Return a dict of dhcp options. The dict contains key value
+         pairs from the most recent lease.
+ 
+-        @param distro: a distro object - not used in this class, but required
+-                       for function signature compatibility with other classes
+-                       that require a distro object
++        @param interface: an interface name - not used in this class, but
++            required for function signature compatibility with other classes
++            that require a distro object
+         @raises: InvalidDHCPLeaseFileError on empty or unparseable leasefile
+             content.
+         """
+diff --git a/cloudinit/sources/__init__.py b/cloudinit/sources/__init__.py
+index c207b5ed6..f9650268a 100644
+--- a/cloudinit/sources/__init__.py
++++ b/cloudinit/sources/__init__.py
+@@ -610,13 +610,11 @@ class DataSource(CloudInitPickleMixin, metaclass=abc.ABCMeta):
+     @property
+     def fallback_interface(self):
+         """Determine the network interface used during local network config."""
+-        if self._fallback_interface is None:
+-            self._fallback_interface = net.find_fallback_nic()
+-            if self._fallback_interface is None:
+-                LOG.warning(
+-                    "Did not find a fallback interface on %s.", self.cloud_name
+-                )
+-        return self._fallback_interface
++        if self.distro.fallback_interface is None:
++            LOG.warning(
++                "Did not find a fallback interface on %s.", self.cloud_name
++            )
++        return self.distro.fallback_interface
+ 
+     @property
+     def platform_type(self):
+diff --git a/tests/unittests/net/test_dhcp.py b/tests/unittests/net/test_dhcp.py
+index ffa3eab17..9af5f93aa 100644
+--- a/tests/unittests/net/test_dhcp.py
++++ b/tests/unittests/net/test_dhcp.py
+@@ -372,20 +372,7 @@ class TestDHCPDiscoveryClean(CiTestCase):
+     with_logs = True
+     ib_address_prefix = "00:00:00:00:00:00:00:00:00:00:00:00"
+ 
+-    @mock.patch("cloudinit.net.dhcp.find_fallback_nic")
+-    def test_no_fallback_nic_found(self, m_fallback_nic):
+-        """Log and do nothing when nic is absent and no fallback is found."""
+-        m_fallback_nic.return_value = None  # No fallback nic found
+-
+-        with pytest.raises(NoDHCPLeaseInterfaceError):
+-            maybe_perform_dhcp_discovery(MockDistro())
+-
+-        self.assertIn(
+-            "Skip dhcp_discovery: Unable to find fallback nic.",
+-            self.logs.getvalue(),
+-        )
+-
+-    @mock.patch("cloudinit.net.dhcp.find_fallback_nic", return_value="eth9")
++    @mock.patch("cloudinit.distros.net.find_fallback_nic", return_value="eth9")
+     @mock.patch("cloudinit.net.dhcp.os.remove")
+     @mock.patch("cloudinit.net.dhcp.subp.subp")
+     @mock.patch("cloudinit.net.dhcp.subp.which")
+@@ -406,7 +393,7 @@ class TestDHCPDiscoveryClean(CiTestCase):
+             self.logs.getvalue(),
+         )
+ 
+-    @mock.patch("cloudinit.net.dhcp.find_fallback_nic", return_value="eth9")
++    @mock.patch("cloudinit.distros.net.find_fallback_nic", return_value="eth9")
+     @mock.patch("cloudinit.net.dhcp.os.remove")
+     @mock.patch("cloudinit.net.dhcp.subp.subp")
+     @mock.patch("cloudinit.net.dhcp.subp.which")
+@@ -435,17 +422,6 @@ class TestDHCPDiscoveryClean(CiTestCase):
+             self.logs.getvalue(),
+         )
+ 
+-    @mock.patch("cloudinit.net.dhcp.find_fallback_nic", return_value=None)
+-    def test_provided_nic_does_not_exist(self, m_fallback_nic):
+-        """When the provided nic doesn't exist, log a message and no-op."""
+-        with pytest.raises(NoDHCPLeaseInterfaceError):
+-            maybe_perform_dhcp_discovery(MockDistro(), "idontexist")
+-
+-        self.assertIn(
+-            "Skip dhcp_discovery: nic idontexist not found in get_devicelist.",
+-            self.logs.getvalue(),
+-        )
+-
+     @mock.patch("cloudinit.net.dhcp.subp.which")
+     @mock.patch("cloudinit.net.dhcp.find_fallback_nic")
+     def test_absent_dhclient_command(self, m_fallback, m_which):
+diff --git a/tests/unittests/sources/test_cloudstack.py b/tests/unittests/sources/test_cloudstack.py
+index 8ee04b3e1..b33c5e492 100644
+--- a/tests/unittests/sources/test_cloudstack.py
++++ b/tests/unittests/sources/test_cloudstack.py
+@@ -244,6 +244,13 @@ class TestCloudStackHostname(CiTestCase):
+             )
+         )
+ 
++        self.patches.enter_context(
++            mock.patch(
++                "cloudinit.distros.net.find_fallback_nic",
++                return_value="eth0",
++            )
++        )
++
+         self.patches.enter_context(
+             mock.patch(
+                 MOD_PATH
+@@ -304,7 +311,7 @@ class TestCloudStackHostname(CiTestCase):
+         )
+ 
+         ds = DataSourceCloudStack(
+-            {}, MockDistro(), helpers.Paths({"run_dir": self.tmp})
++            {}, ubuntu.Distro("", {}, {}), helpers.Paths({"run_dir": self.tmp})
+         )
+         ds._fallback_interface = "eth0"
+         with mock.patch(MOD_PATH + ".util.load_file"):
+diff --git a/tests/unittests/sources/test_ec2.py b/tests/unittests/sources/test_ec2.py
+index 5f60ad737..32fed89da 100644
+--- a/tests/unittests/sources/test_ec2.py
++++ b/tests/unittests/sources/test_ec2.py
+@@ -10,6 +10,7 @@ import requests
+ import responses
+ 
+ from cloudinit import helpers
++from cloudinit.distros import ubuntu
+ from cloudinit.sources import DataSourceEc2 as ec2
+ from tests.unittests import helpers as test_helpers
+ 
+@@ -342,9 +343,11 @@ class TestEc2(test_helpers.ResponsesTestCase):
+         p.start()
+         self.addCleanup(p.stop)
+ 
+-    def _setup_ds(self, sys_cfg, platform_data, md, md_version=None):
++    def _setup_ds(
++        self, sys_cfg, platform_data, md, md_version=None, distro=None
++    ):
+         self.uris = []
+-        distro = mock.MagicMock()
++        distro = distro or mock.MagicMock()
+         distro.get_tmp_exec_path = self.tmp_dir
+         paths = helpers.Paths({"run_dir": self.tmp})
+         if sys_cfg is None:
+@@ -846,7 +849,7 @@ class TestEc2(test_helpers.ResponsesTestCase):
+ 
+     @mock.patch("cloudinit.net.ephemeral.EphemeralIPv6Network")
+     @mock.patch("cloudinit.net.ephemeral.EphemeralIPv4Network")
+-    @mock.patch("cloudinit.net.find_fallback_nic")
++    @mock.patch("cloudinit.distros.net.find_fallback_nic")
+     @mock.patch("cloudinit.net.ephemeral.maybe_perform_dhcp_discovery")
+     @mock.patch("cloudinit.sources.DataSourceEc2.util.is_FreeBSD")
+     def test_ec2_local_performs_dhcp_on_non_bsd(
+@@ -873,6 +876,7 @@ class TestEc2(test_helpers.ResponsesTestCase):
+             platform_data=self.valid_platform_data,
+             sys_cfg={"datasource": {"Ec2": {"strict_id": False}}},
+             md={"md": DEFAULT_METADATA},
++            distro=ubuntu.Distro("", {}, {}),
+         )
+ 
+         ret = ds.get_data()
+diff --git a/tests/unittests/sources/test_init.py b/tests/unittests/sources/test_init.py
+index 44d63b816..b3764945d 100644
+--- a/tests/unittests/sources/test_init.py
++++ b/tests/unittests/sources/test_init.py
+@@ -6,6 +6,7 @@ import os
+ import stat
+ 
+ from cloudinit import importer, util
++from cloudinit.distros import ubuntu
+ from cloudinit.event import EventScope, EventType
+ from cloudinit.helpers import Paths
+ from cloudinit.sources import (
+@@ -73,7 +74,7 @@ class TestDataSource(CiTestCase):
+     def setUp(self):
+         super(TestDataSource, self).setUp()
+         self.sys_cfg = {"datasource": {"_undef": {"key1": False}}}
+-        self.distro = "distrotest"  # generally should be a Distro object
++        self.distro = ubuntu.Distro("", {}, {})
+         self.paths = Paths({})
+         self.datasource = DataSource(self.sys_cfg, self.distro, self.paths)
+ 
+@@ -201,7 +202,7 @@ class TestDataSource(CiTestCase):
+         for log in expected_logs:
+             self.assertIn(log, logs)
+ 
+-    @mock.patch("cloudinit.sources.net.find_fallback_nic")
++    @mock.patch("cloudinit.distros.net.find_fallback_nic")
+     def test_fallback_interface_is_discovered(self, m_get_fallback_nic):
+         """The fallback_interface is discovered via find_fallback_nic."""
+         m_get_fallback_nic.return_value = "nic9"
+@@ -221,7 +222,7 @@ class TestDataSource(CiTestCase):
+     @mock.patch("cloudinit.sources.net.find_fallback_nic")
+     def test_wb_fallback_interface_is_cached(self, m_get_fallback_nic):
+         """The fallback_interface is cached and won't be rediscovered."""
+-        self.datasource._fallback_interface = "nic10"
++        self.datasource.distro._fallback_interface = "nic10"
+         self.assertEqual("nic10", self.datasource.fallback_interface)
+         m_get_fallback_nic.assert_not_called()
+ 
+diff --git a/tests/unittests/sources/test_openstack.py b/tests/unittests/sources/test_openstack.py
+index 127123cff..97cc8c94e 100644
+--- a/tests/unittests/sources/test_openstack.py
++++ b/tests/unittests/sources/test_openstack.py
+@@ -338,7 +338,7 @@ class TestOpenStackDataSource(test_helpers.ResponsesTestCase):
+         ds_os_local = ds.DataSourceOpenStackLocal(
+             settings.CFG_BUILTIN, distro, helpers.Paths({"run_dir": self.tmp})
+         )
+-        ds_os_local._fallback_interface = "eth9"  # Monkey patch for dhcp
++        distro.fallback_interface = "eth9"  # Monkey patch for dhcp
+         m_dhcp.return_value = {
+             "interface": "eth9",
+             "fixed-address": "192.168.2.9",

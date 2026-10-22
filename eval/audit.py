@@ -56,7 +56,8 @@ def trials(directories: list[Path]) -> dict:
     return found
 
 
-def audit(references: Path, directories: list[Path]) -> str:
+def count(references: Path, directories: list[Path]) -> tuple[dict, list[str]]:
+    """Per arm, how many passing patches show each signal; and the flagged patches."""
     upstream = {
         int(path.parent.name.rsplit("-", 1)[-1]): path.read_text()
         for path in references.rglob("reference.diff")
@@ -83,6 +84,11 @@ def audit(references: Path, directories: list[Path]) -> str:
         table[arm].update(name for name, value in row.items() if value)
         if any(row[name] for name in COLUMNS[3:4] + COLUMNS[5:]):
             flagged.append(f"- {arm} task {task} repetition {repetition}: {sorted(mine)}")
+    return table, flagged
+
+
+def audit(references: Path, directories: list[Path]) -> str:
+    table, flagged = count(references, directories)
     lines = ["| Arm | " + " | ".join(COLUMNS) + " |", "|---|" + "---:|" * len(COLUMNS)]
     for arm, row in sorted(table.items()):
         lines.append(f"| {arm} | " + " | ".join(str(row[name]) for name in COLUMNS) + " |")

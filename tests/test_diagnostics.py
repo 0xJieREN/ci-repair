@@ -4,7 +4,7 @@ import stat
 
 import pytest
 
-from ci_repair.diagnostics import MASK, configure_logging, record_error, redact
+from ci_repair.diagnostics import MASK, configure_logging, has_credential, record_error, redact
 
 
 @pytest.mark.parametrize(
@@ -59,3 +59,10 @@ def test_logging_covers_this_package_only(monkeypatch):
     configure_logging()
     assert len(package.handlers) == 1 and package.level == logging.INFO
     assert logging.getLogger().handlers == roots  # mini's records are not printed twice
+
+
+def test_a_credential_is_a_host_value_or_a_token_shape_not_a_variable_name():
+    environ = {"DEEPSEEK_API_KEY": "host-secret-value"}
+    assert has_credential("sent host-secret-value", environ)
+    assert has_credential("x = 'ghp_" + "d" * 36 + "'", {})
+    assert not has_credential("token = self.config['token']\npassword: seekrit", environ)

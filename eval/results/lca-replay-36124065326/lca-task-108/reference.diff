@@ -1,0 +1,58 @@
+diff --git a/docs/advanced/ssl.md b/docs/advanced/ssl.md
+index 1eec32f..2c3e679 100644
+--- a/docs/advanced/ssl.md
++++ b/docs/advanced/ssl.md
+@@ -14,7 +14,7 @@ You can configure the verification using `httpx.SSLContext()`.
+ ```pycon
+ >>> ssl_context = httpx.SSLContext()
+ >>> ssl_context
+-<SSLContext [verify=True]>
++SSLContext(verify=True)
+ >>> httpx.get("https://www.example.com", ssl_context=ssl_context)
+ httpx.ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate has expired (_ssl.c:997)
+ ```
+@@ -24,7 +24,7 @@ For example, you can use this to disable verification completely and allow insec
+ ```pycon
+ >>> no_verify = httpx.SSLContext(verify=False)
+ >>> no_verify
+-<SSLContext [verify=False]>
++SSLContext(verify=False)
+ >>> httpx.get("https://expired.badssl.com/", ssl_context=no_verify)
+ <Response [200 OK]>
+ ```
+diff --git a/httpx/_config.py b/httpx/_config.py
+index 303388d..8cfeea7 100644
+--- a/httpx/_config.py
++++ b/httpx/_config.py
+@@ -136,7 +136,9 @@ class SSLContext(ssl.SSLContext):
+                 )
+ 
+     def __repr__(self) -> str:
+-        return f"<SSLContext [verify={self.verify}]>"
++        class_name = self.__class__.__name__
++
++        return f"{class_name}(verify={self.verify!r})"
+ 
+     def __new__(
+         cls,
+diff --git a/tests/test_config.py b/tests/test_config.py
+index 530b150..b39efa8 100644
+--- a/tests/test_config.py
++++ b/tests/test_config.py
+@@ -74,6 +74,16 @@ def test_SSLContext_with_get_request(server, cert_pem_file):
+     assert response.status_code == 200
+ 
+ 
++def test_SSLContext_repr():
++    ssl_context = httpx.SSLContext()
++
++    assert repr(ssl_context) == "SSLContext(verify=True)"
++
++    ssl_context = httpx.SSLContext(verify=certifi.where())
++
++    assert repr(ssl_context) == "SSLContext(verify='{}')".format(certifi.where())
++
++
+ def test_limits_repr():
+     limits = httpx.Limits(max_connections=100)
+     expected = (
