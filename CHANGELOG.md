@@ -32,9 +32,42 @@ measurements live in [eval/README.md](eval/README.md).
 | 0.4.0 | 09-18…09-22 | `09afeb6`…`74c0d04` | Hardening, evaluation harnesses, then the automatic lifecycle: policy, stop gate, reconstruction, multi-job, webhook | Paired synthetic, historical and LCA pilots |
 | 0.5.0 | 09-23…09-28 | `a0a3377`…`v0.5.0` | Scope focus, live acceptance, replay fidelity on a real dataset, paired comparison with Pi, orchestration and verification efficiency | Live webhook→draft PR; 39/68 LCA tasks usable; 234 + 21 paired trials; −53% wall time from lean verification (round 3, 117 trials) |
 | 0.6.0 | 09-28 | `4504d62`…`v0.6.0` | Remove the manual single-job path; evaluation never scores provider failures; past results in one place | Full gate 240 passed; round 3 completed by a rerun with no provider errors |
-| Unreleased | 09-28…10-02 | `82090ad`… | Baseline alongside the agent; a checkable evaluation contract; failure analysis; a prompt intervention against it | 10.8 s of baseline per trial overlapped (round 4, 39 trials × 1); all 111 passing patches of round 3 stay within the upstream fix's files; 16 of 19 failures are one behaviour; the intervention is inconclusive (8/12 against 6/12 on 4 tasks, run `36970961464`) |
+| Unreleased | 09-28…10-22 | `82090ad`… | Baseline alongside the agent; a checkable evaluation contract; failure analysis; a prompt intervention against it; the run loop tested without Docker | 10.8 s of baseline per trial overlapped (round 4, 39 trials × 1); all 111 passing patches of round 3 stay within the upstream fix's files; 16 of 19 failures are one behaviour; the intervention is inconclusive (8/12 against 6/12 on 4 tasks, run `36970961464`); unit gate 236 → 258 tests, coverage 81% → 89% |
 
 ## [Unreleased]
+
+### Stage T1: the run loop tested without Docker (2026-10-22)
+
+**Motivation.** Without Docker the unit gate covered 63% of `orchestrate.py`. The
+run loop's branches (a job fixed by an earlier repair, a failed fix-up, the job
+budget, a failed setup) ran only in the opt-in Docker tests, which cover four of
+them. Nothing exercised the whole chain from a webhook delivery to a draft PR, and
+`build_environment` was tested only by building real images.
+
+**Added**
+- `tests/test_orchestrate_flow.py`: ten run-level cases with containers and the
+  agent replaced by a file-level fake. Each replayed check is a predicate on the
+  source tree; Git candidate state, reconstruction, ordering, budgets, policy and
+  the run report are real.
+- `tests/test_end_to_end.py`: a signed webhook delivery goes through the SQLite
+  queue, the canonical re-check, collection, the orchestrator and the publication
+  gate to a draft PR. GitHub, Docker and the model are faked; the push goes to a
+  local bare repository. Two more cases cover a policy without an allowed default
+  model and a refused publication.
+- `tests/test_environment_build.py`: `build_environment` against a scripted
+  `docker`. It checks the setup network chosen by policy, no host mounts, the
+  offline checkout, no image after a failed setup, container removal after any
+  error, image reuse, and separate tags for setup variants.
+
+**Verification.** `scripts/check.sh --unit`: 258 passed, 14 skipped (Docker), up
+from 236. Line coverage of the unit gate (`coverage run -m pytest`, not part of the
+gate): 81% → 89% overall; `orchestrate.py` 63% → 90%, `reconstruct.py` 76% → 87%,
+`webhook.py` 80% → 87%.
+
+**Known limits.** The fakes restate the pipeline's contract (baseline, patch,
+verification); if the real contract changes, these tests can pass while the Docker
+tests fail. `workspace.py` stays at 70%: its uncovered lines are the Docker sandbox
+itself.
 
 ### Stage P1: write the repair instead of searching for it (2026-10-02, `5427d2a`)
 
