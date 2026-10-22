@@ -139,10 +139,15 @@ CATEGORIES = {
         "*_pb2_grpc.py",
         "*.pb.go",
         "*.generated.*",
+        # Output directories at any depth: a monorepo package has its own dist/.
         "dist/*",
+        "*/dist/*",
         "build/*",
+        "*/build/*",
         "vendor/*",
+        "*/vendor/*",
         "node_modules/*",
+        "*/node_modules/*",
         "*.egg-info/*",
     ),
     "config": (

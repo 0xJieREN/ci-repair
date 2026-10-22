@@ -43,7 +43,8 @@ the permissive legacy rules (paths and file modes only).
 | `repair.max_rejected_submissions` / `max_probes` / `max_jobs` | 2 / 10 / 5 | |
 
 Categories are fixed path patterns in `policy.py` (for example `.github/*`,
-`*.lock`, `pyproject.toml`, `tests/`, `test_*.py`, `*_pb2.py`, `dist/*`, `tox.ini`).
+`*.lock`, `pyproject.toml`, `tests/`, `test_*.py`, `*_pb2.py`, `dist/` at any depth,
+`tox.ini`).
 A change can be within `allowed_paths` and still be REVIEW or DENY by category.
 
 ## Budgets: requested → maximum → effective

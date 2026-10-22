@@ -57,6 +57,11 @@ def test_policy_inside_repository_under_repair_is_refused(tmp_path):
         ("tests/test_app.py", ["tests"]),
         ("src/pkg/app_test.go", ["tests"]),
         ("src/api_pb2.py", ["generated"]),
+        ("dist/app.js", ["generated"]),
+        ("packages/web/dist/app.js", ["generated"]),
+        ("packages/web/node_modules/left-pad/index.js", ["generated"]),
+        ("third_party/vendor/lib.go", ["generated"]),
+        ("src/distribute.py", []),
         ("tox.ini", ["config"]),
     ],
 )

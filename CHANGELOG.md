@@ -36,6 +36,28 @@ measurements live in [eval/README.md](eval/README.md).
 
 ## [Unreleased]
 
+### Stage F3: generated output in subdirectories is classified as generated (2026-10-22)
+
+**Motivation.** The `generated` category (DENY by default) listed `dist/*`, `build/*`,
+`vendor/*` and `node_modules/*`. A pattern containing `/` is matched against the whole
+path, so these matched only at the repository root: a change to
+`packages/web/dist/app.js` or to a nested `node_modules/` was not classified, and a
+patch that edited build output could be ALLOW.
+
+**Fixed**
+- The four output directories match at any depth (`*/dist/*` and so on), the idiom
+  `PROTECTED` already uses for `*/ci-repair-policy*`.
+
+**Verification.** New cases in `tests/test_policy.py` (nested `dist/`,
+`node_modules/`, `vendor/`; `src/distribute.py` stays uncategorized) failed before
+the fix. None of the 40 distinct files changed by recorded CI Repair trials, nor
+any file in the archived upstream fixes of run `36124065326`, lies under such a
+directory, so no recorded grade changes. `scripts/check.sh --unit`: 267 passed.
+
+**Known limits.** A source package named `build`, `dist` or `vendor` below the root
+(for example `src/build/`) is now DENY by default, as a root-level one already was.
+An operator can relax `patch.categories.generated` to REVIEW.
+
 ### Stage F2: a job failing only in a later step after earlier repairs gets its agent (2026-10-22)
 
 **Motivation.** A job with earlier repairs was checked on the original source, then
